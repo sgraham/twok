@@ -1,19 +1,19 @@
 ### 42 simplest
 def __main__():
-    42
+    return 42
 ### -1 line 3
 def __main__():
-    33
-        99
+    return 33
+        return 99
 ### 44 more exprs
 def __main__():
-    33
-    99
-    99
-    44
+    print 33
+    print 99
+    print 99
+    return 44
 ### -1 line 1, col 8
 def ab cd():
-    33
+    return 33
 ### 0 END
 
 # vim: set ft=python:

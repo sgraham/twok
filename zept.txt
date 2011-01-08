@@ -78,14 +78,14 @@ def bleep(x):
         push(ret, 99)
     else:
         push(ret, 3)
-    ret
+    return ret
 
 def __main__():
     print(itos(stuff()))
     things(99)
     blorp(5)
     bleep(4)
-    bleep(9)
+    return bleep(9)
 
 def x():
     if a and b or 

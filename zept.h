@@ -75,7 +75,11 @@ static char *file, *cur, *lastTokLoc, *ident, *codeseg, *codep, *entry;
 static int ch, tok, tokn, indentLevel;
 #define inp() ch = *cur++
 #define isid() (isalnum(ch) || ch == '_')
-enum { TOK_UNK, TOK_EOF, TOK_IDENT, TOK_NUM, TOK_IF, TOK_ELIF, TOK_ELSE, TOK_FOR, TOK_MAIN };
+#define KWS "   if elif else or for def return __main__ mod and not print"
+enum { TOK_UNK, TOK_EOF, TOK_NUM, TOK_IF = 3, TOK_ELIF = 6, TOK_ELSE = 11,
+    TOK_OK = 16, TOK_FOR = 19, TOK_DEF = 23, TOK_RETURN = 27, TOK_MAIN = 34,
+    TOK_MOD = 43, TOK_AND = 47, TOK_NOT = 51, TOK_PRINT = 55,
+    TOK_IDENT = 0x100 };
 void indedent(int delta);
 static jmp_buf errBuf;
 static char errorText[512];
@@ -83,16 +87,18 @@ static char errorText[512];
 
 #define ob(b) (*codep++ = b)
 #define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
-void loadconst32(int n)
+void g_loadconst32(int n)
 {
     ob(0xb8); /* mov eax, N */
     out32(n);
 }
-void prolog()
+void g_prolog()
 {
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
 }
+void g_leave() { ob(0xc9); }
+void g_ret() { ob(0xc3); }
 void next(int skipWS)
 {
     lastTokLoc = cur - 1;
@@ -112,6 +118,7 @@ void next(int skipWS)
             sbpush(ident, ch);
             inp();
         }
+        sbpush(ident, 0);
         if (isdigit(tok))
         {
             tokn = strtol(ident, 0, 0);
@@ -119,8 +126,8 @@ void next(int skipWS)
         }
         else
         {
-            /* todo; symtab entry */
             tok = TOK_IDENT;
+            if (strstr(KWS, ident)) tok = strstr(KWS, ident) - KWS;
         }
     }
     else
@@ -129,7 +136,6 @@ void next(int skipWS)
         if (tok == 0)
             tok = TOK_EOF;
     }
-    sbpush(ident, 0);
 }
 
 void getRowColTextFor(int offset, int* line, int* col, char** linetext)
@@ -178,12 +184,6 @@ void skip(int c, int skipWS)
         error("'%c' expected, got '%s'\n", c, ident);
     next(skipWS);
 }
-void skipi(char* s, int skipWS)
-{
-    if (tok != TOK_IDENT || strcmp(ident, s) != 0)
-        error("'%s' expected, got '%s'\n", s, ident);
-    next(skipWS);
-}
 
 void indedent(int delta)
 {
@@ -204,14 +204,22 @@ void readIndent()
     indentLevel = count / 4;
 }
 
-void expr()
+void stmt()
 {
-    ;//printf("expression: ");
-    if (tok == TOK_NUM)
-        loadconst32(tokn);
-    else if (tok == TOK_IDENT)
-        ; //printf("ident: %s\n", ident);
-    next(0); /* skip the thing */
+    //printf("tok: %d %s\n", tok, &KWS[tok]);
+    if (tok == TOK_RETURN)
+    {
+        next(1);
+        g_loadconst32(tokn);
+        g_ret();
+        next(0); /* skip the thing */
+    }
+    else if (tok == TOK_PRINT)
+    {
+        // temp hack for tests
+        next(1);
+        next(0);
+    }
     skip('\n', 0);
     readIndent();
 }
@@ -223,7 +231,7 @@ void block()
     indedent(1);
     startIndent = indentLevel;
     while (indentLevel >= startIndent)
-        expr();
+        stmt();
 }
 
 int toplevel()
@@ -232,9 +240,9 @@ int toplevel()
     while (tok != TOK_EOF)
     {
         next(0);
-        skipi("def", 1);
+        skip(TOK_DEF, 1);
         //printf("FUNC: '%s'\n", ident);
-        if (strcmp(ident, "__main__") == 0) entry = codep;
+        if (tok == TOK_MAIN) entry = codep;
         next(1); skip('(', 1);
         offset = 0;
         while (tok != ')')
@@ -259,11 +267,11 @@ int zept_run(char* code)
         ident = 0;
         errorText[0] = 0;
         codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        prolog();
+        g_prolog();
         inp();
         toplevel();
-        *codep++ = 0xc9;
-        *codep++ = 0xc3;
+        g_leave();
+        g_ret();
         ret = ((int (*)())entry)();
     }
     else
