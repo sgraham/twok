@@ -45,6 +45,13 @@ on shutdown, iterate all globals and free any that are allocations
 list manipulation has to do a bit extra to free, etc.
 or just free(@a) manually?
 
+or maybe @ just means manual, and global-ness is specified separately
+with global @a (and global a would be bad)
+
+@a and a are different variables
+if you return an @ from a function it should be assigned to an @
+and vice-versa.
+
 do the global magic business later
 
 
