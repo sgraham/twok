@@ -81,6 +81,14 @@ static jmp_buf errBuf;
 static char errorText[512];
 #define ALLOC_SIZE 1<<17
 
+#define ob(b) (*codep++ = b)
+#define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
+void loadNum(int n)
+{
+    ob(0xb8); /* mov N,%eax */
+    out32(n);
+}
+
 void next(int skipWS)
 {
     while (skipWS && ch == ' ')
@@ -187,7 +195,7 @@ void expr()
 {
     ;//printf("expression: ");
     if (tok == TOK_NUM)
-        ; //printf("number: %d\n", tokn);
+        loadNum(tokn);
     else if (tok == TOK_IDENT)
         ; //printf("ident: %s\n", ident);
     next(0); /* skip the thing */
@@ -211,7 +219,7 @@ int toplevel()
     while (tok != TOK_EOF)
     {
         next(0);
-        printf("FUNC: '%s'\n", ident);
+        //printf("FUNC: '%s'\n", ident);
         if (strcmp(ident, "__main__") == 0) entry = codep;
         next(1); skip('(', 1);
         offset = 0;
@@ -227,8 +235,6 @@ int toplevel()
     }
 }
 
-#define __
-
 int zept_run(char* code)
 {
     int ret;
@@ -239,9 +245,7 @@ int zept_run(char* code)
         ident = 0;
         errorText[0] = 0;
         codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        inp();
-        toplevel();
-        printf("ENTRY: %p\n", codeseg);
+        /*printf("ENTRY: %p\n", entry);*/
         /*
         __ push(RBP);
         __ mov(RSP, RBP);
@@ -251,11 +255,8 @@ int zept_run(char* code)
         */
         *codep++ = 0x55; /* push %rbp */
         *codep++ = 0x48; *codep++ = 0x89; *codep++ = 0xe5; /* mov %rsp,%rbp */
-        *codep++ = 0xb8;
-        *codep++ = 42;
-        *codep++ = 0x0;
-        *codep++ = 0x0;
-        *codep++ = 0x0; /* mov 0x2d,%eax */
+        inp();
+        toplevel();
         *codep++ = 0xc9;
         *codep++ = 0xc3;
         ret = ((int (*)())entry)();
