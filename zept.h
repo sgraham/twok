@@ -1,3 +1,6 @@
+/* pull stuff itno structure and memset it
+ * get branching to main working and return hardcoded val
+ * */
 /*
 
 vaguely python-ish language
@@ -48,6 +51,7 @@ so [] === NULL, data lives in regular malloc'd space
 #include <stdarg.h>
 #include <setjmp.h>
 #include <string.h>
+#include <sys/mman.h>
 #define stb__sbraw(a) ((int *) (a) - 2)
 #define stb__sbm(a)   stb__sbraw(a)[0]
 #define stb__sbn(a)   stb__sbraw(a)[1]
@@ -67,14 +71,15 @@ static void stb__sbgrowf(void **arr, int increment, int itemsize)
     }
 }
 
-static char *file, *cur, *ident;
-static int ch, tok, tokn, entry, indentLevel;
+static char *file, *cur, *ident, *codeseg, *codep, *entry;
+static int ch, tok, tokn, indentLevel;
 #define inp() ch = *cur++
 #define isid() (isalnum(ch) || ch == '_')
 enum { TOK_UNK, TOK_EOF, TOK_IDENT, TOK_NUM, TOK_IF, TOK_ELIF, TOK_ELSE, TOK_FOR, TOK_MAIN };
 void indedent(int delta);
 static jmp_buf errBuf;
 static char errorText[512];
+#define ALLOC_SIZE 1<<17
 
 void next(int skipWS)
 {
@@ -83,7 +88,7 @@ void next(int skipWS)
         inp();
         next(skipWS);
     }
-    if (ident) sbfree(ident);
+    sbfree(ident);
     ident = 0;
     tok = ch;
     if (isid())
@@ -206,7 +211,8 @@ int toplevel()
     while (tok != TOK_EOF)
     {
         next(0);
-        //printf("FUNC: %s\n", ident);
+        printf("FUNC: '%s'\n", ident);
+        if (strcmp(ident, "__main__") == 0) entry = codep;
         next(1); skip('(', 1);
         offset = 0;
         while (tok != ')')
@@ -221,19 +227,45 @@ int toplevel()
     }
 }
 
+#define __
+
 int zept_run(char* code)
 {
+    int ret;
     if (setjmp(errBuf) == 0)
     {
         cur = file = code;
         indentLevel = tok = 0;
+        ident = 0;
         errorText[0] = 0;
+        codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         inp();
         toplevel();
-        return 0;
+        printf("ENTRY: %p\n", codeseg);
+        /*
+        __ push(RBP);
+        __ mov(RSP, RBP);
+        __ mov(EAX, 45);
+        __ leaveq();
+        __ retq();
+        */
+        *codep++ = 0x55; /* push %rbp */
+        *codep++ = 0x48; *codep++ = 0x89; *codep++ = 0xe5; /* mov %rsp,%rbp */
+        *codep++ = 0xb8;
+        *codep++ = 42;
+        *codep++ = 0x0;
+        *codep++ = 0x0;
+        *codep++ = 0x0; /* mov 0x2d,%eax */
+        *codep++ = 0xc9;
+        *codep++ = 0xc3;
+        ret = ((int (*)())entry)();
     }
     else
     {
-        return -1;
+        ret = -1;
     }
+    sbfree(ident);
+    munmap(codeseg, ALLOC_SIZE);
+    return ret;
 }
+

@@ -51,20 +51,18 @@ int main(int argc, char** argv)
             copyline(&dest, &src);
         *dest = 0;
         if (argc == 2 && atoi(argv[1]) != i) continue;
-#ifdef VERBOSE
-        printf("\n\n\n");
-#endif
         printf("[%20s]: ", description);
-#ifdef VERBOSE
-        printf("\n------------------------\n%s------------------------\n", curtest);
-#endif
         ret = zept_run(curtest);
-        int failed = ret != expectedRC || (expectedRC != 0 && strstr(errorText, description) == NULL);
+        int failed = ret != expectedRC || (expectedRC == -1 && strstr(errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
         passCount += !failed;
 #ifdef VERBOSE
-        printf("rc=%d, want=%d, desc='%s'\nerr='%s'\n", ret, expectedRC, description, errorText);
+        if (failed)
+        {
+            printf("\n------------------------\n%s------------------------\n", curtest);
+            printf("rc=%d, want=%d, desc='%s'\nerr='%s'\n\n\n", ret, expectedRC, description, errorText);
+        }
 #endif
     }
     return failCount;
