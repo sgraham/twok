@@ -58,7 +58,7 @@ int main(int argc, char** argv)
 #ifdef VERBOSE
         printf("\n------------------------\n%s------------------------\n", curtest);
 #endif
-        ret = zept_run(curtest) != 0;
+        ret = zept_run(curtest);
         int failed = ret != expectedRC || (expectedRC != 0 && strstr(errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
