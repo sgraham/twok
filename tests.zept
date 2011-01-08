@@ -1,16 +1,19 @@
 ### 42 simplest
-__main__():
+def __main__():
     42
 ### -1 line 3
-__main__():
+def __main__():
     33
         99
 ### 44 more exprs
-__main__():
+def __main__():
     33
     99
     99
     44
+### -1 line 1, col 8
+def ab cd():
+    33
 ### 0 END
 
 # vim: set ft=python:

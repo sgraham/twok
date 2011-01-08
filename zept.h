@@ -71,7 +71,7 @@ static void stb__sbgrowf(void **arr, int increment, int itemsize)
     }
 }
 
-static char *file, *cur, *ident, *codeseg, *codep, *entry;
+static char *file, *cur, *lastTokLoc, *ident, *codeseg, *codep, *entry;
 static int ch, tok, tokn, indentLevel;
 #define inp() ch = *cur++
 #define isid() (isalnum(ch) || ch == '_')
@@ -95,10 +95,12 @@ void prolog()
 }
 void next(int skipWS)
 {
+    lastTokLoc = cur - 1;
     while (skipWS && ch == ' ')
     {
         inp();
         next(skipWS);
+        return;
     }
     sbfree(ident);
     ident = 0;
@@ -136,13 +138,14 @@ void getRowColTextFor(int offset, int* line, int* col, char** linetext)
     *line = 1;
     *col = 1;
     *linetext = cur;
-    while (offset-- >= 0)
+    while (--offset >= 0)
     {
+        *col += 1;
         if (*cur++ == '\n')
         {
             *linetext = cur;
             *line += 1;
-            *col += 1;
+            *col = 1;
         }
     }
 }
@@ -155,12 +158,12 @@ void error(char *fmt, ...)
     char tmp[256];
 
     va_start(ap, fmt);
-    getRowColTextFor(cur - file, &line, &col, &text);
-    sprintf(errorText, "line %d:\n", line);
+    getRowColTextFor(lastTokLoc - file, &line, &col, &text);
+    sprintf(errorText, "line %d, col %d:\n", line, col);
     eotext = text;
     while (*eotext != '\n' && *eotext != 0) ++eotext;
     strncat(errorText, text, eotext - text + 1);
-    while (col--) strcat(errorText, " "); /* todo; ! */
+    while (--col) strcat(errorText, " "); /* todo; ! */
     strcat(errorText, "^\n");
     vsprintf(tmp, fmt, ap);
     strcat(errorText, tmp);
@@ -173,6 +176,12 @@ void skip(int c, int skipWS)
 {
     if (tok != c)
         error("'%c' expected, got '%s'\n", c, ident);
+    next(skipWS);
+}
+void skipi(char* s, int skipWS)
+{
+    if (tok != TOK_IDENT || strcmp(ident, s) != 0)
+        error("'%s' expected, got '%s'\n", s, ident);
     next(skipWS);
 }
 
@@ -223,6 +232,7 @@ int toplevel()
     while (tok != TOK_EOF)
     {
         next(0);
+        skipi("def", 1);
         //printf("FUNC: '%s'\n", ident);
         if (strcmp(ident, "__main__") == 0) entry = codep;
         next(1); skip('(', 1);
@@ -244,7 +254,7 @@ int zept_run(char* code)
     int ret;
     if (setjmp(errBuf) == 0)
     {
-        cur = file = code;
+        cur = file = lastTokLoc = code;
         indentLevel = tok = 0;
         ident = 0;
         errorText[0] = 0;
@@ -264,4 +274,3 @@ int zept_run(char* code)
     munmap(codeseg, ALLOC_SIZE);
     return ret;
 }
-

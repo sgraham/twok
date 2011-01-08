@@ -51,7 +51,7 @@ int main(int argc, char** argv)
             copyline(&dest, &src);
         *dest = 0;
         if (argc == 2 && atoi(argv[1]) != i) continue;
-        printf("[%20s]: ", description);
+        printf("[%20s %s]: ", description, expectedRC == -1 ? "error" : "     ");
         ret = zept_run(curtest);
         int failed = ret != expectedRC || (expectedRC == -1 && strstr(errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
