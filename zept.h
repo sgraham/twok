@@ -248,7 +248,7 @@ int zept_run(char* code)
         indentLevel = tok = 0;
         ident = 0;
         errorText[0] = 0;
-        codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         prolog();
         inp();
         toplevel();
