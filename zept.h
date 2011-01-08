@@ -42,7 +42,6 @@ static int ch, tok, tokn, indentLevel;
 #define KWS "   if elif else or for def return __main__ mod and not print "
 #define KW(k) (strstr(KWS, #k " ") - KWS)
 enum { TOK_UNK, TOK_EOF, TOK_NUM, TOK_IDENT = 0x100 };
-void indedent(int delta);
 static jmp_buf errBuf;
 static char errorText[512];
 #define ALLOC_SIZE 1<<17
