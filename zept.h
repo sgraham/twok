@@ -234,6 +234,6 @@ int zept_run(char* code)
     }
     else
     {
-        return 1;
+        return -1;
     }
 }

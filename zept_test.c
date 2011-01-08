@@ -23,7 +23,7 @@ void copyline(char** dest, char** src)
 int main(int argc, char** argv)
 {
     int i = 0, ret, failCount = 0, passCount = 0;
-    int errorExpected;
+    int expectedRC;
     FILE* f = fopen("tests.zept", "rb");
     char* src = testdata;
     char* dest, *desc;
@@ -35,9 +35,10 @@ int main(int argc, char** argv)
             fprintf(stderr, "expecting ### line in tests\n");
             exit(1);
         }
-        errorExpected = src[3] == 'E';
-        src += 4 + errorExpected;
+        src += 4;
+        expectedRC = strtol(src, &src, 0);
         desc = description;
+        src += 1;
         copyline(&desc, &src);
         *(desc - 1) = 0;
         if (strcmp(description, "END") == 0)
@@ -53,17 +54,17 @@ int main(int argc, char** argv)
 #ifdef VERBOSE
         printf("\n\n\n");
 #endif
-        printf("[%c%20s]: ", errorExpected ? 'E' : ' ', description);
+        printf("[%20s]: ", description);
 #ifdef VERBOSE
         printf("\n------------------------\n%s------------------------\n", curtest);
 #endif
-        ret = zept_run(curtest);
-        int failed = ret != errorExpected || (errorExpected && strstr(errorText, description) == NULL);
+        ret = zept_run(curtest) != 0;
+        int failed = ret != expectedRC || (expectedRC != 0 && strstr(errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
         passCount += !failed;
 #ifdef VERBOSE
-        printf("rc=%d, desc='%s'\nerr='%s'\n", ret, description, errorText);
+        printf("rc=%d, want=%d, desc='%s'\nerr='%s'\n", ret, expectedRC, description, errorText);
 #endif
     }
     return failCount;
