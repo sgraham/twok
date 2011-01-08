@@ -1,33 +1,70 @@
 #include "zept.h"
 #include <stdio.h>
 
-int main()
-{
-    int i;
-    for (i = 0; ; ++i)
-    {
-        char buf[256];
-        FILE* f;
-        long len;
-        char* p;
-        sprintf(buf, "test%02d.zept", i);
-        if ((f = fopen(buf, "rb")) != NULL)
-        {
-            fseek(f, 0, SEEK_END);
-            len = ftell(f);
-            rewind(f);
-            p = malloc(len + 1);
-            fread(p, 1, len, f);
-            p[len] = 0;
-            fclose(f);
+char testdata[1<<24];
+char curtest[1<<24];
+char description[256];
 
-            zept_run(p);
-        }
-        else
+void copyline(char** dest, char** src)
+{
+    int done;
+    for (;;)
+    {
+        **dest = **src;
+        done = **src == '\n';
+        (*dest)++;
+        (*src)++;
+        if (done) return;
+    }
+}
+
+#define VERBOSE
+
+int main(int argc, char** argv)
+{
+    int i = 0, ret, failCount = 0, passCount = 0;
+    int errorExpected;
+    FILE* f = fopen("tests.zept", "rb");
+    char* src = testdata;
+    char* dest, *desc;
+    fread(src, 1, 1<<24, f);
+    for (;; ++i)
+    {
+        if (src[0] != '#' || src[1] != '#' || src[2] != '#')
         {
-            printf("%d tests run\n", i);
+            fprintf(stderr, "expecting ### line in tests\n");
+            exit(1);
+        }
+        errorExpected = src[3] == 'E';
+        src += 4 + errorExpected;
+        desc = description;
+        copyline(&desc, &src);
+        *(desc - 1) = 0;
+        if (strcmp(description, "END") == 0)
+        {
+            printf("%d/%d tests passed\n", passCount, passCount + failCount);
             break;
         }
+        dest = curtest;
+        while (!(src[0] == '#' && src[1] == '#' && src[2] == '#'))
+            copyline(&dest, &src);
+        *dest = 0;
+        if (argc == 2 && atoi(argv[1]) != i) continue;
+#ifdef VERBOSE
+        printf("\n\n\n");
+#endif
+        printf("[%c%20s]: ", errorExpected ? 'E' : ' ', description);
+#ifdef VERBOSE
+        printf("\n------------------------\n%s------------------------\n", curtest);
+#endif
+        ret = zept_run(curtest);
+        int failed = ret != errorExpected || (errorExpected && strstr(errorText, description) == NULL);
+        printf("%s\n", failed ? "FAILED": "ok");
+        failCount += failed;
+        passCount += !failed;
+#ifdef VERBOSE
+        printf("rc=%d, desc='%s'\nerr='%s'\n", ret, description, errorText);
+#endif
     }
-    return 0;
+    return failCount;
 }

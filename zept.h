@@ -1,25 +1,37 @@
 /*
 
 vaguely python-ish language
-main goal is <= 2k loc
+main goal is <= 1k loc
 1-pass compile to x64 or arm
-no globals
-vars are double or double[]. "stuff" is conv to list
+vars are word (bottom bit set) or *word (bottom bit clear).
+"str" is conv to list
 len(L), push(L,x), pop(L), L[i]
 unresolved uses are dlsym/GetProcAddress
+no globals
+indent always 4 spaces
+gc walks global ptr table
 
     # recursive fibs up to arg passed
-    def fib(x):
+    fib(x):
         if x < 3:
             1
         else:
             fib(x - 1) + fib(x - 2)
 
-    def __main__(args[]):
+    __main__(*args):
         for x in range(args[0]):
             print(fib(x))
         
-hrm
+making lists dynamically:
+    x = [1,2,3]
+===
+    x = NULL
+    push(x, 1)
+    push(x, 2)
+    push(x, 3)
+
+so [] === NULL, data lives in regular malloc'd space
+    
 
 */
 
@@ -31,7 +43,11 @@ hrm
 #define sbadd(a,n)        (stb__sbmaybegrow(a,n), stb__sbn(a)+=(n), &(a)[stb__sbn(a)-(n)])
 #define sblast(a)         ((a)[stb__sbn(a)-1])
 
+#include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include <setjmp.h>
+#include <string.h>
 #define stb__sbraw(a) ((int *) (a) - 2)
 #define stb__sbm(a)   stb__sbraw(a)[0]
 #define stb__sbn(a)   stb__sbraw(a)[1]
@@ -51,44 +67,173 @@ static void stb__sbgrowf(void **arr, int increment, int itemsize)
     }
 }
 
-static char *cur, *ident;
-static int ch, tok;
+static char *file, *cur, *ident;
+static int ch, tok, tokn, entry, indentLevel;
 #define inp() ch = *cur++
 #define isid() (isalnum(ch) || ch == '_')
-enum { TOK_IDENT, TOK_NUM, TOK_IF, TOK_ELIF, TOK_ELSE, TOK_FOR, TOK_MAIN };
-int next()
+enum { TOK_UNK, TOK_EOF, TOK_IDENT, TOK_NUM, TOK_IF, TOK_ELIF, TOK_ELSE, TOK_FOR, TOK_MAIN };
+void indedent(int delta);
+static jmp_buf errBuf;
+static char errorText[512];
+
+void next(int skipWS)
 {
-    while (isspace(ch))
+    while (skipWS && ch == ' ')
     {
         inp();
-        next();
+        next(skipWS);
     }
+    if (ident) sbfree(ident);
     ident = 0;
-    tok = TOK_IDENT;
+    tok = ch;
     if (isid())
     {
-        printf("start tok\n");
         while (isid())
         {
             sbpush(ident, ch);
             inp();
         }
-        sbpush(ident, 0);
-        printf("  got: %s\n", ident);
+        if (isdigit(tok))
+        {
+            tokn = strtol(ident, 0, 0);
+            tok = TOK_NUM;
+        }
+        else
+        {
+            /* todo; symtab entry */
+            tok = TOK_IDENT;
+        }
     }
-    return 0;
+    else
+    {
+        inp();
+        if (tok == 0)
+            tok = TOK_EOF;
+    }
+    sbpush(ident, 0);
 }
 
-int funcs()
+void getRowColTextFor(int offset, int* line, int* col, char** linetext)
 {
-    next();
-    return 0;
+    char* cur = file;
+    *line = 1;
+    *col = 1;
+    *linetext = cur;
+    while (offset-- >= 0)
+    {
+        if (*cur++ == '\n')
+        {
+            *linetext = cur;
+            *line += 1;
+            *col += 1;
+        }
+    }
+}
+
+void error(char *fmt, ...)
+{
+    va_list ap;
+    int line, col;
+    char* text, *eotext;
+    char tmp[256];
+
+    va_start(ap, fmt);
+    getRowColTextFor(cur - file, &line, &col, &text);
+    sprintf(errorText, "line %d:\n", line);
+    eotext = text;
+    while (*eotext != '\n' && *eotext != 0) ++eotext;
+    strncat(errorText, text, eotext - text + 1);
+    while (col--) strcat(errorText, " "); /* todo; ! */
+    strcat(errorText, "^\n");
+    vsprintf(tmp, fmt, ap);
+    strcat(errorText, tmp);
+    strcat(errorText, "\n");
+    longjmp(errBuf, 1);
+    va_end(ap);
+}
+
+void skip(int c, int skipWS)
+{
+    if (tok != c)
+        error("'%c' expected, got '%s'\n", c, ident);
+    next(skipWS);
+}
+
+void indedent(int delta)
+{
+    int i;
+    for (i = 0; i < (indentLevel + delta) * 4; ++i) skip(' ', 0);
+    indentLevel += delta;
+}
+void readIndent()
+{
+    char* start = cur;
+    int count = 0;
+    for (; tok == ' '; ++count) next(0);
+    if (count % 4 != 0 || count / 4 > indentLevel)
+    {
+        cur = start;
+        error("bad indent");
+    }
+    indentLevel = count / 4;
+}
+
+void expr()
+{
+    ;//printf("expression: ");
+    if (tok == TOK_NUM)
+        ; //printf("number: %d\n", tokn);
+    else if (tok == TOK_IDENT)
+        ; //printf("ident: %s\n", ident);
+    next(0); /* skip the thing */
+    skip('\n', 0);
+    readIndent();
+}
+
+void block()
+{
+    int startIndent;
+    skip('\n', 0);
+    indedent(1);
+    startIndent = indentLevel;
+    while (indentLevel >= startIndent)
+        expr();
+}
+
+int toplevel()
+{
+    int offset;
+    while (tok != TOK_EOF)
+    {
+        next(0);
+        //printf("FUNC: %s\n", ident);
+        next(1); skip('(', 1);
+        offset = 0;
+        while (tok != ')')
+        {
+            offset++;
+            next(1);
+            if (tok == ')')
+                next(1);
+        }
+        skip(')', 1); skip(':', 1);
+        block();
+    }
 }
 
 int zept_run(char* code)
 {
-    cur = code;
-    inp();
-    funcs();
-    return 0;
+    if (setjmp(errBuf) == 0)
+    {
+        cur = file = code;
+        indentLevel = tok = 0;
+        errorText[0] = 0;
+        inp();
+        toplevel();
+        return 0;
+    }
+    else
+    {
+        return 1;
+    }
 }

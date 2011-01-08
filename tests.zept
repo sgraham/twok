@@ -1,0 +1,16 @@
+### simplest
+__main__():
+    42
+###E line 3
+__main__():
+    33
+        99
+### more exprs
+__main__():
+    33
+    99
+    99
+    44
+### END
+
+# vim: set ft=python:
