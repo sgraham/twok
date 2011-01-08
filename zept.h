@@ -15,13 +15,13 @@ indent always 4 spaces
 gc walks global ptr table
 
     # recursive fibs up to arg passed
-    fib(x):
+    def fib(x):
         if x < 3:
             1
         else:
             fib(x - 1) + fib(x - 2)
 
-    __main__(*args):
+    def __main__(*args):
         for x in range(args[0]):
             print(fib(x))
         
@@ -83,12 +83,16 @@ static char errorText[512];
 
 #define ob(b) (*codep++ = b)
 #define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
-void loadNum(int n)
+void loadconst32(int n)
 {
-    ob(0xb8); /* mov N,%eax */
+    ob(0xb8); /* mov eax, N */
     out32(n);
 }
-
+void prolog()
+{
+    ob(0x55); /* push rbp */
+    ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
+}
 void next(int skipWS)
 {
     while (skipWS && ch == ' ')
@@ -195,7 +199,7 @@ void expr()
 {
     ;//printf("expression: ");
     if (tok == TOK_NUM)
-        loadNum(tokn);
+        loadconst32(tokn);
     else if (tok == TOK_IDENT)
         ; //printf("ident: %s\n", ident);
     next(0); /* skip the thing */
@@ -245,16 +249,7 @@ int zept_run(char* code)
         ident = 0;
         errorText[0] = 0;
         codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        /*printf("ENTRY: %p\n", entry);*/
-        /*
-        __ push(RBP);
-        __ mov(RSP, RBP);
-        __ mov(EAX, 45);
-        __ leaveq();
-        __ retq();
-        */
-        *codep++ = 0x55; /* push %rbp */
-        *codep++ = 0x48; *codep++ = 0x89; *codep++ = 0xe5; /* mov %rsp,%rbp */
+        prolog();
         inp();
         toplevel();
         *codep++ = 0xc9;
