@@ -165,10 +165,101 @@ void readIndent()
     indentLevel = count / 4;
 }
 
+void atom()
+{
+    if (tok == TOK_NUM)
+        g_loadconst32(tokn);
+    else
+        error("unexpected atom");
+}
+
+void factor()
+{
+    if (tok == '+' || tok == '-' || tok == '~')
+        factor();
+    else
+        atom();
+}
+
+void term()
+{
+    factor();
+    while (tok == '*' || tok == '/' || tok == KW(mod)) factor();
+}
+
+void arithexpr()
+{
+    term();
+    while (tok == '+' || tok == '-') term();
+}
+
+void andexpr()
+{
+    arithexpr();
+    while (tok == '&') arithexpr();
+}
+
+void xorexpr()
+{
+    andexpr();
+    while (tok == '^') andexpr();
+}
+
+void expr()
+{
+    xorexpr();
+    while (tok == '|') xorexpr();
+}
+
+void comparison()
+{
+    atom();
+    while (tok == '<') atom();
+}
+void nottest()
+{
+    if (tok == KW(not))
+    {
+        nottest();
+    }
+    else
+    {
+        comparison();
+    }
+}
+void andtest()
+{
+    nottest();
+    while (tok == KW(and)) nottest();
+}
+void test()
+{
+    andtest();
+    while (tok == KW(or)) andtest();
+}
+
 void stmt()
 {
     //printf("tok: %d %s\n", tok, &KWS[tok]);
-    if (tok == KW(return))
+    if (tok == KW(if))
+    {
+        skip(KW(if), 1);
+        comparison();
+        skip(':', 1);
+        suite();
+        while (tok == KW(elif))
+        {
+            comparison();
+            skip(':', 1);
+            suite();
+        }
+        if (tok == KW(else))
+        {
+            skip(':', 1);
+            suite();
+        }
+    }
+    else if (tok == KW(return))
     {
         next(1);
         g_loadconst32(tokn);
@@ -185,7 +276,7 @@ void stmt()
     readIndent();
 }
 
-void block()
+int suite()
 {
     int startIndent;
     skip('\n', 0);
@@ -214,7 +305,7 @@ int toplevel()
                 next(1);
         }
         skip(')', 1); skip(':', 1);
-        block();
+        suite();
     }
 }
 
