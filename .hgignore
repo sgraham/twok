@@ -3,3 +3,4 @@ syntax: glob
 *.swp
 zept_test
 *.dSYM
+dump.dat
