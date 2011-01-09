@@ -1,6 +1,17 @@
-/*
+/* zept-0.10 - public domain, pythonish script lang - http://h4ck3r.net/zept.h
+ *                                   no warranty implied; use at your own risk
+ *
+ * goals:
+ * - native compile on x64
+ * - <1k loc
+ * - no deps
+ *
+ * (zepto is SI for 10e-21)
+ *
+ * TODO:
  * makeTokenN/S too similar
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -10,8 +21,7 @@
 #include <ctype.h>
 
 typedef struct Token {
-    int type;
-    int pos;
+    int type, pos;
     union {
         char str[32];
         int tokn;
@@ -19,15 +29,11 @@ typedef struct Token {
 } Token;
 
 typedef struct Context {
-    char* input;
     Token* tokens;
-
     int curtok;
-
+    char *input, *codeseg, *codep, *entry;
     jmp_buf errBuf;
     char errorText[512];
-
-    char *codeseg, *codep, *entry;
 } Context;
 
 static Context C;
@@ -105,13 +111,16 @@ void error(char *fmt, ...)
     char tmp[256];
 
     va_start(ap, fmt);
-    getRowColTextFor(CURTOK.pos, &line, &col, &text);
-    sprintf(C.errorText, "line %d, col %d:\n", line, col);
-    eotext = text;
-    while (*eotext != '\n' && *eotext != 0) ++eotext;
-    strncat(C.errorText, text, eotext - text + 1);
-    while (--col) strcat(C.errorText, " "); /* todo; ! */
-    strcat(C.errorText, "^\n");
+    if (C.curtok < zvsize(C.tokens)) /* for errors after parse finished */
+    {
+        getRowColTextFor(CURTOK.pos, &line, &col, &text);
+        sprintf(C.errorText, "line %d, col %d:\n", line, col);
+        eotext = text;
+        while (*eotext != '\n' && *eotext != 0) ++eotext;
+        strncat(C.errorText, text, eotext - text + 1);
+        while (--col) strcat(C.errorText, " "); /* todo; ! */
+        strcat(C.errorText, "^\n");
+    }
     vsprintf(tmp, fmt, ap);
     strcat(C.errorText, tmp);
     strcat(C.errorText, "\n");
@@ -164,9 +173,11 @@ void tokenize()
 
         if (*pos == 0)
         {
+            donestream:
             for (i = 1; i < zvsize(indents); ++i)
                 TOK(T_DEDENT);
             TOK(T_END);
+            zvfree(indents);
             zvfree(ident);
             return;
         }
@@ -177,7 +188,6 @@ void tokenize()
                 while (*pos++ != '\n') {}
             else
                 ++pos;
-            TOK(T_NL);
         }
         if (column > zvlast(indents))
         {
@@ -215,6 +225,7 @@ void tokenize()
             }
             else
             {
+                if (!*pos) goto donestream;
                 char tmp[2] = { 0, 0 };
                 tmp[0] = *pos++;
                 TOKI(tmp[0], tmp);
@@ -239,8 +250,30 @@ void g_prolog()
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
 }
-void g_leave() { ob(0xc9); }
-void g_ret() { ob(0xc3); }
+void g_leave_ret() { ob(0xc9); ob(0xc3); } /* leave; ret */
+#define put32(p, n) (*(int*)(p) = (n))
+char* g_test(int NZ)
+{
+    ob(0x85); ob(0xc0); /* test eax, eax */
+    ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
+    put32(C.codep, 0);
+    C.codep += 4;
+    return C.codep - 4;
+}
+void g_fixup1(char* p, char* to)
+{
+    put32(p, to - p - 4);
+}
+void g_fixup(char* p) { g_fixup1(p, C.codep); }
+void g_save() { ob(0x50); } /* push eax */
+void g_restorealt() { ob(0x59); } /* pop ecx */
+void g_cmp(int CC)
+{
+    ob(0x39); ob(0xc1); /* cmp ecx, eax */
+    g_loadconst32(0);
+    ob(0x0f); ob(0x90 + CC); /* setxx al */
+    ob(0xc0);
+}
 
 /*
  * parsing
@@ -263,17 +296,21 @@ void comparison()
     while (CURTOKt == '<')
     {
         SKIP('<');
+        g_save();
         atom();
+        g_restorealt();
+        g_cmp(6);
     }
 }
 
 void stmt()
 {
+    char *off0;
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
         g_loadconst32(CURTOK.data.tokn);
-        g_ret();
+        g_leave_ret();
         NEXT();
     }
     else if (CURTOKt == KW(print))
@@ -285,14 +322,18 @@ void stmt()
     {
         SKIP(KW(if));
         comparison();
+        off0 = g_test(0);
         suite();
+        g_fixup(off0);
+        /*
         while (CURTOKt == KW(elif))
         {
             comparison();
             suite();
         }
-        if (CURTOKt == KW(if))
+        if (CURTOKt == KW(else))
             suite();
+        */
     }
     else if (CURTOKt == T_NL) error("bad indent");
     else error("expected stmt");
@@ -316,7 +357,9 @@ void funcdef()
     if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
     SKIP('(');
     SKIP(')');
+    g_prolog();
     suite();
+    g_leave_ret();
 }
 
 void fileinput()
@@ -339,7 +382,7 @@ int zept_run(char* code)
     if (setjmp(C.errBuf) == 0)
     {
         tokenize();
-#if 0
+#if 0 /* dump tokens generated from stream */
         { int j;
         for (j = 0; j < zvsize(C.tokens); ++j)
         {
@@ -350,16 +393,21 @@ int zept_run(char* code)
         }}
 #endif
         C.codeseg = C.codep = mmap(0, allocSize, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-        g_prolog();
         fileinput();
-        g_leave();
-        g_ret();
+#if 0 /* dump disassembly of generated code, needs ndisasm in path */
+        { FILE* f = fopen("dump.dat", "wb");
+        fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
+        fclose(f);
+        system("ndisasm -b64 dump.dat"); }
+#endif
+        if (!C.entry) error("no entry point '__main__'");
         ret = ((int (*)())C.entry)();
     }
     else
     {
         ret = -1;
     }
+    zvfree(C.tokens);
     munmap(C.codeseg, allocSize);
     return ret;
 }
