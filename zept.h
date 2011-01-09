@@ -372,14 +372,14 @@ void fileinput()
     if (C.curtok != zvsize(C.tokens)) error("unexpected extra input");
 }
 
-#if __unix__
-#include <sys/mman.h>
-static void* zept_allocExec(int size) { return mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
-static void zept_freeExec(void* p, int size) { munmap(p, size); }
+#if __unix__ || (__APPLE__ && __MACH__)
+    #include <sys/mman.h>
+    static void* zept_allocExec(int size) { return mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
+    static void zept_freeExec(void* p, int size) { munmap(p, size); }
 #elif _WIN32
-#include <windows.h>
-static void* zept_allocExec(int size) { error("todo;"); }
-static void zept_freeExec(void* p, int size) { error("todo;"); }
+    #include <windows.h>
+    static void* zept_allocExec(int size) { error("todo;"); }
+    static void zept_freeExec(void* p, int size) { error("todo;"); }
 #endif
 
 int zept_run(char* code)
