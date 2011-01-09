@@ -1,3 +1,4 @@
+#define ZEPT_DEFINE_IMPLEMENTATION
 #include "zept.h"
 #include <stdio.h>
 
@@ -27,7 +28,7 @@ int main(int argc, char** argv)
     FILE* f = fopen("tests.zept", "rb");
     char* src = testdata;
     char* dest, *desc;
-    fread(src, 1, 1<<24, f);
+    ret = /* warning suppress */ fread(src, 1, 1<<24, f);
     for (;; ++i)
     {
         if (src[0] != '#' || src[1] != '#' || src[2] != '#')
@@ -52,7 +53,7 @@ int main(int argc, char** argv)
         *dest = 0;
         if (argc == 2 && atoi(argv[1]) != i) continue;
         printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
-        ret = zept_run(curtest);
+        ret = zeptRun(curtest);
         int failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;

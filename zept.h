@@ -1,16 +1,43 @@
 /* zept-0.10 - public domain, pythonish script lang - http://h4ck3r.net/zept.h
- *                                  No warranty implied; use at your own risk.
- *
- * goals:
- * - native compile on x64
- * - <1k loc
- * - no deps
- *
- * (zepto is SI for 10e-21)
- *
- * TODO:
- * makeTokenN/S too similar
- */
+   Scott Graham 2011 <scott.zept@h4ck3r.net>
+                                    No warranty implied; use at your own risk.
+
+Before including,
+
+    #define ZEPT_DEFINE_IMPLEMENTATION
+
+in the file that you want to have the implementation.
+
+
+ABOUT:
+
+    Native compile on x64, ARM (not yet)
+    < 1k LOC (`sloccount zept.h`)
+    No external dependencies
+
+    ("zepto" is the SI prefix for 10e-21)
+
+
+TODO:
+
+    everything
+
+*/
+
+#ifndef INCLUDED_ZEPT_H
+#define INCLUDED_ZEPT_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+extern int zeptRun(char* code);
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* INCLUDED_ZEPT_H */
+
+#ifdef ZEPT_DEFINE_IMPLEMENTATION
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,20 +63,24 @@ typedef struct Context {
 } Context;
 
 static Context C;
-void suite();
+static void suite();
+
 
 /*
  * misc utilities.
  */
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
-#define zvfree(a)         ((a) ? free(zv__zvraw(a)),(void*)0 : (void*)0)
-#define zvpush(a,v)       (zv__zvmaybegrow(a,1), (a)[zv__zvn(a)++] = (v))
-#define zvpop(a)          (zv__zvn(a)-=1)
-#define zvsize(a)         ((a) ? zv__zvn(a) : 0)
-#define zvadd(a,n)        (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])
-#define zvlast(a)         ((a)[zv__zvn(a)-1])
-#define zvcontains(a,i)   (zv__zvcontains((char*)(a),(char*)&(i),sizeof(*(a)),zv__zvn(a)))
+#define zvfree(a)                   ((a) ? free(zv__zvraw(a)),(void*)0 : (void*)0)
+#define zvpush(a,v)                 (zv__zvmaybegrow(a,1), (a)[zv__zvn(a)++] = (v))
+#define zvpop(a)                    (zv__zvn(a)-=1)
+#define zvsize(a)                   ((a) ? zv__zvn(a) : 0)
+/*#define zvadd(a,n)                  (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])*/
+#define zvlast(a)                   ((a)[zv__zvn(a)-1])
+#define zvfindnp(a,i,n,psize)       (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
+#define zvcontainsnp(a,i,n,psize)   (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1)
+#define zvcontainsp(a,i,psize)      (zvcontainsnp((a),i,zv__zvn(a),psize))
+#define zvcontains(a,i)             (zvcontainsp((a),i,sizeof(*(a))))
 
 #define zv__zvraw(a) ((int *) (a) - 2)
 #define zv__zvm(a)   zv__zvraw(a)[0]
@@ -69,24 +100,22 @@ static void zv__zvgrowf(void **arr, int increment, int itemsize)
         zv__zvm(*arr) = m;
     }
 }
-static int zv__zvcontains(char* arr, char* find, int itemsize, int n)
+static int zv__zvfind(char* arr, char* find, int itemsize, int n, int partialsize)
 {
     int i;
     for (i = 0; i < n; ++i)
-        if (memcmp(&arr[i*itemsize], find, itemsize) == 0)
-            return 1;
-    return 0;
+        if (memcmp(&arr[i*itemsize], find, partialsize) == 0)
+            return i;
+    return -1;
 }
 
 #define CURTOK (C.tokens[C.curtok])
-#define PREVTOK (C.tokens[C.curtok-1])
 #define CURTOKt (CURTOK.type)
 
-void getRowColTextFor(int offset, int* line, int* col, char** linetext)
+static void geterrpos(int offset, int* line, int* col, char** linetext)
 {
     char* cur = C.input;
-    *line = 1;
-    *col = 1;
+    *line = 1; *col = 1;
     *linetext = cur;
     while (--offset >= 0)
     {
@@ -100,9 +129,8 @@ void getRowColTextFor(int offset, int* line, int* col, char** linetext)
     }
 }
 
-
 /* report error message and longjmp */
-void error(char *fmt, ...)
+static void error(char *fmt, ...)
 {
     va_list ap;
     int line, col;
@@ -112,7 +140,7 @@ void error(char *fmt, ...)
     va_start(ap, fmt);
     if (C.curtok < zvsize(C.tokens)) /* for errors after parse finished */
     {
-        getRowColTextFor(CURTOK.pos, &line, &col, &text);
+        geterrpos(CURTOK.pos, &line, &col, &text);
         sprintf(C.errorText, "line %d, col %d:\n", line, col);
         eotext = text;
         while (*eotext != '\n' && *eotext != 0) ++eotext;
@@ -132,30 +160,22 @@ void error(char *fmt, ...)
  * tokenize. build a zv of Token's for rest. indent/dedent is a bit icky.
  */
 
-#define KWS " if elif else or for def return mod and not print "
+#define KWS " if elif else or for def return mod and not print << >> <= >= == != "
 #define KW(k) (strstr(KWS, #k " ") - KWS)
-enum { T_UNK, T_IDENT = 0x100, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
-
-Token makeTokenS(int type, char* str, int pos)
+enum { T_UNK, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
+static Token* tokSetStr(Token* t, char* str)
 {
-    Token t = { type, pos };
-    if (strlen(str) >= 32) error("identifer too long");
-    strcpy(t.data.str, str);
-    t.data.str[sizeof(t.data.str) - 1] = 0;
+    if (strlen(str) >= sizeof(t->data.str)) error("identifer too long");
+    strcpy(t->data.str, str);
+    t->data.str[sizeof(t->data.str) - 1] = 0;
     return t;
 }
-Token makeTokenN(int type, int value, int pos)
-{
-    Token t = { type, pos };
-    t.data.tokn = value;
-    return t;
-}
-#define TOK(t) zvpush(C.tokens, makeTokenS(t, #t, startpos - C.input))
-#define TOKI(t, s) zvpush(C.tokens, makeTokenS(t, s, startpos - C.input))
-#define TOKN(t, v) zvpush(C.tokens, makeTokenN(t, v, startpos - C.input))
+#define TOK(t) do { Token _ = { t, startpos - C.input }; zvpush(C.tokens, *tokSetStr(&_, #t)); } while(0)
+#define TOKI(t, s) do { Token _ = { t, startpos - C.input }; zvpush(C.tokens, *tokSetStr(&_, s)); } while(0)
+#define TOKN(t, v) do { Token _ = { t, startpos - C.input }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
-void tokenize()
+static void tokenize()
 {
     char *pos = C.input, *startpos;
     int i, tok, column;
@@ -172,8 +192,7 @@ void tokenize()
 
         if (*pos == 0)
         {
-            donestream:
-            for (i = 1; i < zvsize(indents); ++i)
+donestream: for (i = 1; i < zvsize(indents); ++i)
                 TOK(T_DEDENT);
             TOK(T_END);
             zvfree(indents);
@@ -225,48 +244,63 @@ void tokenize()
             else
             {
                 if (!*pos) goto donestream;
-                char tmp[2] = { 0, 0 };
-                tmp[0] = *pos++;
-                TOKI(tmp[0], tmp);
+                char tmp[3] = { *pos++, 0, 0 };
+                if (0) {}
+                #define twochar(t) else if (*(pos-1) == #t[0] && *pos == #t[1]) { tmp[1] = *pos++; TOKI(KW(t), tmp); }
+                    twochar(<<) twochar(>>)
+                    twochar(<=) twochar(>=)
+                    twochar(!=) twochar(==)
+                #undef twochar
+                else TOKI(tmp[0], tmp);
             }
         }
         ++pos;
     }
 }
 
+
 /*
  * code generation 
  */
 #define ob(b) (*C.codep++ = b)
 #define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
-void g_loadconst32(int n)
+
+static void g_loadconst32(int n)
 {
     ob(0xb8); /* mov eax, N */
     out32(n);
 }
-void g_prolog()
+
+static void g_prolog()
 {
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
 }
-void g_leave_ret() { ob(0xc9); ob(0xc3); } /* leave; ret */
+
+static void g_leave_ret() { ob(0xc9); ob(0xc3); } /* leave; ret */
+
 #define put32(p, n) (*(int*)(p) = (n))
-char* g_test(int NZ)
+
+static char* g_test(int NZ)
 {
     ob(0x85); ob(0xc0); /* test eax, eax */
     ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
-    put32(C.codep, 0);
-    C.codep += 4;
+    out32(0);
     return C.codep - 4;
 }
-void g_fixup1(char* p, char* to)
+
+static void g_fixup1(char* p, char* to)
 {
     put32(p, to - p - 4);
 }
-void g_fixup(char* p) { g_fixup1(p, C.codep); }
-void g_save() { ob(0x50); } /* push eax */
-void g_restorealt() { ob(0x59); } /* pop ecx */
-void g_cmp(int CC)
+
+static void g_fixup(char* p) { g_fixup1(p, C.codep); }
+
+static void g_save() { ob(0x50); } /* push eax */
+
+static void g_restorealt() { ob(0x59); } /* pop ecx */
+
+static void g_cmp(int CC)
 {
     ob(0x39); ob(0xc1); /* cmp ecx, eax */
     g_loadconst32(0);
@@ -274,13 +308,14 @@ void g_cmp(int CC)
     ob(0xc0);
 }
 
+
 /*
  * parsing
  */
 #define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK.data.str); NEXT(); } while(0)
 
-void atom()
+static void atom()
 {
     if (CURTOKt == T_NUM)
     {
@@ -289,20 +324,30 @@ void atom()
     }
     else error("unexpected atom");
 }
-void comparison()
+
+static void comparison()
 {
+    struct { char op; char cc; } cmptoks[] = { /* rhs is very platform-specific, the setcc op for each */
+        { '<',    0xc },
+        { '>',    0xf },
+        { KW(<=), 0xe },
+        { KW(>=), 0xd },
+        { KW(==), 4 },
+        { KW(!=), 5 },
+    };
+    int cmptoki;
     atom();
-    while (CURTOKt == '<')
+    while ((cmptoki = zvfindnp(cmptoks, CURTOKt, 6, 1)) != -1)
     {
-        SKIP('<');
+        NEXT();
         g_save();
         atom();
         g_restorealt();
-        g_cmp(6);
+        g_cmp(cmptoks[cmptoki].cc);
     }
 }
 
-void stmt()
+static void stmt()
 {
     char *off0;
     if (CURTOKt == KW(return))
@@ -338,7 +383,7 @@ void stmt()
     else error("expected stmt");
 }
 
-void suite()
+static void suite()
 {
     SKIP(':');
     SKIP(T_NL);
@@ -349,11 +394,11 @@ void suite()
     SKIP(T_DEDENT);
 }
 
-void funcdef()
+static void funcdef()
 {
     SKIP(KW(def));
     SKIP(T_IDENT);
-    if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
+    if (strcmp(C.tokens[C.curtok - 1].data.str, "__main__") == 0) C.entry = C.codep;
     SKIP('(');
     SKIP(')');
     g_prolog();
@@ -361,7 +406,7 @@ void funcdef()
     g_leave_ret();
 }
 
-void fileinput()
+static void fileinput()
 {
     while (CURTOKt != T_END)
     {
@@ -382,7 +427,11 @@ void fileinput()
     static void zept_freeExec(void* p, int size) { error("todo;"); }
 #endif
 
-int zept_run(char* code)
+
+/*
+ * main api entry point
+ */
+int zeptRun(char* code)
 {
     int ret;
     memset(&C, 0, sizeof(C));
@@ -403,11 +452,11 @@ int zept_run(char* code)
 #endif
         C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
-#if 0 /* dump disassembly of generated code, needs ndisasm in path */
+#if 1 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
-        system("ndisasm -b64 dump.dat"); }
+        ret = /* warning suppress */ system("ndisasm -b64 dump.dat"); }
 #endif
         if (!C.entry) error("no entry point '__main__'");
         ret = ((int (*)())C.entry)();
@@ -420,3 +469,5 @@ int zept_run(char* code)
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }
+
+#endif /* ZEPT_DEFINE_IMPLEMENTATION */
