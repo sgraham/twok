@@ -69,6 +69,17 @@ def __main__():
         return 999
     return 1
 
+### 13 comment 0
+# this is a comment
+def __main__():
+    # this is another, indented
+    return 13
+
+### 13 comment 1
+def __main__(): # suffix comment
+    return 13 # another
+# more
+
 ### 0 END
 
 # vim: set ft=python:

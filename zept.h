@@ -241,6 +241,11 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
                     TOKI(tok, ident);
                 }
             }
+            else if (*pos == '#')
+            {
+                while (*pos != '\n' && *pos != 0) ++pos;
+                break;
+            }
             else
             {
                 if (!*pos) goto donestream;
