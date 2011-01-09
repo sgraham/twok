@@ -1,107 +1,85 @@
-/* pull stuff itno structure and memset it
- *
+/*
+ * makeTokenN/S too similar
  */
-
-// http://nothings.org/stb/stretchy_buffer.txt
-// stretchy buffer // init: NULL // free: sbfree() // push_back: sbpush() // size: sbcount() //
-#define sbfree(a)         ((a) ? free(stb__sbraw(a)),0 : 0)
-#define sbpush(a,v)       (stb__sbmaybegrow(a,1), (a)[stb__sbn(a)++] = (v))
-#define sbcount(a)        ((a) ? stb__sbn(a) : 0)
-#define sbadd(a,n)        (stb__sbmaybegrow(a,n), stb__sbn(a)+=(n), &(a)[stb__sbn(a)-(n)])
-#define sblast(a)         ((a)[stb__sbn(a)-1])
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <setjmp.h>
 #include <string.h>
 #include <sys/mman.h>
-#define stb__sbraw(a) ((int *) (a) - 2)
-#define stb__sbm(a)   stb__sbraw(a)[0]
-#define stb__sbn(a)   stb__sbraw(a)[1]
+#include <ctype.h>
 
-#define stb__sbneedgrow(a,n)  ((a)==0 || stb__sbn(a)+n >= stb__sbm(a))
-#define stb__sbmaybegrow(a,n) (stb__sbneedgrow(a,(n)) ? stb__sbgrow(a,n) : 0)
-#define stb__sbgrow(a,n)  stb__sbgrowf((void **) &(a), (n), sizeof(*(a)))
+typedef struct Token {
+    int type;
+    int pos;
+    union {
+        char str[32];
+        int tokn;
+    } data;
+} Token;
 
-static void stb__sbgrowf(void **arr, int increment, int itemsize)
+typedef struct Context {
+    char* input;
+    Token* tokens;
+
+    int curtok;
+
+    jmp_buf errBuf;
+    char errorText[512];
+
+    char *codeseg, *codep, *entry;
+} Context;
+
+static Context C;
+void suite();
+
+/*
+ * misc utilities.
+ */
+
+/* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
+#define zvfree(a)         ((a) ? free(zv__zvraw(a)),(void*)0 : (void*)0)
+#define zvpush(a,v)       (zv__zvmaybegrow(a,1), (a)[zv__zvn(a)++] = (v))
+#define zvpop(a)          (zv__zvn(a)-=1)
+#define zvsize(a)         ((a) ? zv__zvn(a) : 0)
+#define zvadd(a,n)        (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])
+#define zvlast(a)         ((a)[zv__zvn(a)-1])
+#define zvcontains(a,i)   (zv__zvcontains((char*)(a),(char*)&(i),sizeof(*(a)),zv__zvn(a)))
+
+#define zv__zvraw(a) ((int *) (a) - 2)
+#define zv__zvm(a)   zv__zvraw(a)[0]
+#define zv__zvn(a)   zv__zvraw(a)[1]
+
+#define zv__zvneedgrow(a,n)  ((a)==0 || zv__zvn(a)+n >= zv__zvm(a))
+#define zv__zvmaybegrow(a,n) (zv__zvneedgrow(a,(n)) ? zv__zvgrow(a,n) : 0)
+#define zv__zvgrow(a,n)  zv__zvgrowf((void **) &(a), (n), sizeof(*(a)))
+
+static void zv__zvgrowf(void **arr, int increment, int itemsize)
 {
-    int m = *arr ? 2*stb__sbm(*arr)+increment : increment+1;
-    void *p = realloc(*arr ? stb__sbraw(*arr) : 0, itemsize * m + sizeof(int)*2);
+    int m = *arr ? 2*zv__zvm(*arr)+increment : increment+1;
+    void *p = realloc(*arr ? zv__zvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
     if (p) {
         if (!*arr) ((int *) p)[1] = 0;
         *arr = (void *) ((int *) p + 2);
-        stb__sbm(*arr) = m;
+        zv__zvm(*arr) = m;
     }
+}
+static int zv__zvcontains(char* arr, char* find, int itemsize, int n)
+{
+    int i;
+    for (i = 0; i < n; ++i)
+        if (memcmp(&arr[i*itemsize], find, itemsize) == 0)
+            return 1;
+    return 0;
 }
 
-static char *file, *cur, *lastTokLoc, *ident, *codeseg, *codep, *entry;
-static int ch, tok, tokn, indentLevel;
-#define inp() ch = *cur++
-#define isid() (isalnum(ch) || ch == '_')
-#define KWS "   if elif else or for def return __main__ mod and not print "
-#define KW(k) (strstr(KWS, #k " ") - KWS)
-enum { TOK_UNK, TOK_EOF, TOK_NUM, TOK_IDENT = 0x100 };
-static jmp_buf errBuf;
-static char errorText[512];
-#define ALLOC_SIZE 1<<17
-
-#define ob(b) (*codep++ = b)
-#define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
-void g_loadconst32(int n)
-{
-    ob(0xb8); /* mov eax, N */
-    out32(n);
-}
-void g_prolog()
-{
-    ob(0x55); /* push rbp */
-    ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
-}
-void g_leave() { ob(0xc9); }
-void g_ret() { ob(0xc3); }
-void next(int skipWS)
-{
-    lastTokLoc = cur - 1;
-    while (skipWS && ch == ' ')
-    {
-        inp();
-        next(skipWS);
-        return;
-    }
-    sbfree(ident);
-    ident = 0;
-    tok = ch;
-    if (isid())
-    {
-        while (isid())
-        {
-            sbpush(ident, ch);
-            inp();
-        }
-        sbpush(ident, 0);
-        if (isdigit(tok))
-        {
-            tokn = strtol(ident, 0, 0);
-            tok = TOK_NUM;
-        }
-        else
-        {
-            tok = TOK_IDENT;
-            if (strstr(KWS, ident)) tok = strstr(KWS, ident) - KWS;
-        }
-    }
-    else
-    {
-        inp();
-        if (tok == 0)
-            tok = TOK_EOF;
-    }
-}
+#define CURTOK (C.tokens[C.curtok])
+#define PREVTOK (C.tokens[C.curtok-1])
+#define CURTOKt (CURTOK.type)
 
 void getRowColTextFor(int offset, int* line, int* col, char** linetext)
 {
-    char* cur = file;
+    char* cur = C.input;
     *line = 1;
     *col = 1;
     *linetext = cur;
@@ -117,6 +95,8 @@ void getRowColTextFor(int offset, int* line, int* col, char** linetext)
     }
 }
 
+
+/* report error message and longjmp */
 void error(char *fmt, ...)
 {
     va_list ap;
@@ -125,212 +105,261 @@ void error(char *fmt, ...)
     char tmp[256];
 
     va_start(ap, fmt);
-    getRowColTextFor(lastTokLoc - file, &line, &col, &text);
-    sprintf(errorText, "line %d, col %d:\n", line, col);
+    getRowColTextFor(CURTOK.pos, &line, &col, &text);
+    sprintf(C.errorText, "line %d, col %d:\n", line, col);
     eotext = text;
     while (*eotext != '\n' && *eotext != 0) ++eotext;
-    strncat(errorText, text, eotext - text + 1);
-    while (--col) strcat(errorText, " "); /* todo; ! */
-    strcat(errorText, "^\n");
+    strncat(C.errorText, text, eotext - text + 1);
+    while (--col) strcat(C.errorText, " "); /* todo; ! */
+    strcat(C.errorText, "^\n");
     vsprintf(tmp, fmt, ap);
-    strcat(errorText, tmp);
-    strcat(errorText, "\n");
-    longjmp(errBuf, 1);
+    strcat(C.errorText, tmp);
+    strcat(C.errorText, "\n");
+    longjmp(C.errBuf, 1);
     va_end(ap);
 }
 
-void skip(int c, int skipWS)
+
+/*
+ * tokenize. build a zv of Token's for rest. indent/dedent is a bit icky.
+ */
+
+#define KWS " if elif else or for def return mod and not print "
+#define KW(k) (strstr(KWS, #k " ") - KWS)
+enum { T_UNK, T_IDENT = 0x100, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
+
+Token makeTokenS(int type, char* str, int pos)
 {
-    if (tok != c)
-        error("'%c' expected, got '%s'\n", c, ident);
-    next(skipWS);
+    Token t = { type, pos };
+    if (strlen(str) >= 32) error("identifer too long");
+    strcpy(t.data.str, str);
+    t.data.str[sizeof(t.data.str) - 1] = 0;
+    return t;
+}
+Token makeTokenN(int type, int value, int pos)
+{
+    Token t = { type, pos };
+    t.data.tokn = value;
+    return t;
+}
+#define TOK(t) zvpush(C.tokens, makeTokenS(t, #t, startpos - C.input))
+#define TOKI(t, s) zvpush(C.tokens, makeTokenS(t, s, startpos - C.input))
+#define TOKN(t, v) zvpush(C.tokens, makeTokenN(t, v, startpos - C.input))
+#define isid(ch) (isalnum(ch) || ch == '_')
+
+void tokenize()
+{
+    char *pos = C.input, *startpos;
+    int i, tok, column;
+    int *indents = 0;
+    char *ident = 0;
+
+    zvpush(indents, 0);
+
+    for (;;)
+    {
+        column = 0;
+        while (*pos == ' ') { pos++; column++; }
+        startpos = pos;
+
+        if (*pos == 0)
+        {
+            for (i = 1; i < zvsize(indents); ++i)
+                TOK(T_DEDENT);
+            TOK(T_END);
+            zvfree(ident);
+            return;
+        }
+
+        if (*pos == '#' || *pos == '\r' || *pos == '\n')
+        {
+            if (*pos == '#')
+                while (*pos++ != '\n') {}
+            else
+                ++pos;
+            TOK(T_NL);
+        }
+        if (column > zvlast(indents))
+        {
+            zvpush(indents, column);
+            TOK(T_NL);
+            TOK(T_INDENT);
+        }
+        while (column < zvlast(indents))
+        {
+            if (!zvcontains(indents, column))
+                error("unindent does not match any outer indentation level");
+            zvpop(indents);
+            TOK(T_DEDENT);
+        }
+
+        while (*pos != '\n')
+        {
+            while (*pos == ' ') ++pos;
+            startpos = pos;
+            ident = zvfree(ident);
+            tok = *pos;
+            if (isid(*pos))
+            {
+                while (isid(*pos))
+                    zvpush(ident, *pos++);
+                zvpush(ident, 0);
+                if (isdigit(tok))
+                    TOKN(T_NUM, strtol(ident, 0, 0));
+                else
+                {
+                    tok = T_IDENT;
+                    if (strstr(KWS, ident)) tok = strstr(KWS, ident) - KWS;
+                    TOKI(tok, ident);
+                }
+            }
+            else
+            {
+                char tmp[2] = { 0, 0 };
+                tmp[0] = *pos++;
+                TOKI(tmp[0], tmp);
+            }
+        }
+        ++pos;
+    }
 }
 
-void indedent(int delta)
+/*
+ * code generation 
+ */
+#define ob(b) (*C.codep++ = b)
+#define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
+void g_loadconst32(int n)
 {
-    int i;
-    for (i = 0; i < (indentLevel + delta) * 4; ++i) skip(' ', 0);
-    indentLevel += delta;
+    ob(0xb8); /* mov eax, N */
+    out32(n);
 }
-void readIndent()
+void g_prolog()
 {
-    char* start = cur;
-    int count = 0;
-    for (; tok == ' '; ++count) next(0);
-    if (count % 4 != 0 || count / 4 > indentLevel)
-    {
-        cur = start;
-        error("bad indent");
-    }
-    indentLevel = count / 4;
+    ob(0x55); /* push rbp */
+    ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
 }
+void g_leave() { ob(0xc9); }
+void g_ret() { ob(0xc3); }
+
+/*
+ * parsing
+ */
+#define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
+#define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK.data.str); NEXT(); } while(0)
 
 void atom()
 {
-    if (tok == TOK_NUM)
-        g_loadconst32(tokn);
-    else
-        error("unexpected atom");
+    if (CURTOKt == T_NUM)
+    {
+        g_loadconst32(CURTOK.data.tokn);
+        NEXT();
+    }
+    else error("unexpected atom");
 }
-
-void factor()
-{
-    if (tok == '+' || tok == '-' || tok == '~')
-        factor();
-    else
-        atom();
-}
-
-void term()
-{
-    factor();
-    while (tok == '*' || tok == '/' || tok == KW(mod)) factor();
-}
-
-void arithexpr()
-{
-    term();
-    while (tok == '+' || tok == '-') term();
-}
-
-void andexpr()
-{
-    arithexpr();
-    while (tok == '&') arithexpr();
-}
-
-void xorexpr()
-{
-    andexpr();
-    while (tok == '^') andexpr();
-}
-
-void expr()
-{
-    xorexpr();
-    while (tok == '|') xorexpr();
-}
-
 void comparison()
 {
     atom();
-    while (tok == '<') atom();
-}
-void nottest()
-{
-    if (tok == KW(not))
+    while (CURTOKt == '<')
     {
-        nottest();
+        SKIP('<');
+        atom();
     }
-    else
-    {
-        comparison();
-    }
-}
-void andtest()
-{
-    nottest();
-    while (tok == KW(and)) nottest();
-}
-void test()
-{
-    andtest();
-    while (tok == KW(or)) andtest();
 }
 
 void stmt()
 {
-    //printf("tok: %d %s\n", tok, &KWS[tok]);
-    if (tok == KW(if))
+    if (CURTOKt == KW(return))
     {
-        skip(KW(if), 1);
+        SKIP(KW(return));
+        g_loadconst32(CURTOK.data.tokn);
+        g_ret();
+        NEXT();
+    }
+    else if (CURTOKt == KW(print))
+    {
+        SKIP(KW(print));
+        NEXT();
+    }
+    else if (CURTOKt == KW(if))
+    {
+        SKIP(KW(if));
         comparison();
-        skip(':', 1);
         suite();
-        while (tok == KW(elif))
+        while (CURTOKt == KW(elif))
         {
             comparison();
-            skip(':', 1);
             suite();
         }
-        if (tok == KW(else))
-        {
-            skip(':', 1);
+        if (CURTOKt == KW(if))
             suite();
-        }
     }
-    else if (tok == KW(return))
-    {
-        next(1);
-        g_loadconst32(tokn);
-        g_ret();
-        next(0); /* skip the thing */
-    }
-    else if (tok == KW(print))
-    {
-        // temp hack for tests
-        next(1);
-        next(0);
-    }
-    skip('\n', 0);
-    readIndent();
+    else if (CURTOKt == T_NL) error("bad indent");
+    else error("expected stmt");
 }
 
-int suite()
+void suite()
 {
-    int startIndent;
-    skip('\n', 0);
-    indedent(1);
-    startIndent = indentLevel;
-    while (indentLevel >= startIndent)
+    SKIP(':');
+    SKIP(T_NL);
+    SKIP(T_INDENT);
+    stmt();
+    while (CURTOKt != T_DEDENT)
         stmt();
+    SKIP(T_DEDENT);
 }
 
-int toplevel()
+void funcdef()
 {
-    int offset;
-    while (tok != TOK_EOF)
+    SKIP(KW(def));
+    SKIP(T_IDENT);
+    if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
+    SKIP('(');
+    SKIP(')');
+    suite();
+}
+
+void fileinput()
+{
+    while (CURTOKt != T_END)
     {
-        next(0);
-        skip(KW(def), 1);
-        //printf("FUNC: '%s'\n", ident);
-        if (tok == KW(__main__)) entry = codep;
-        next(1); skip('(', 1);
-        offset = 0;
-        while (tok != ')')
-        {
-            offset++;
-            next(1);
-            if (tok == ')')
-                next(1);
-        }
-        skip(')', 1); skip(':', 1);
-        suite();
+        if (CURTOKt == T_NL) NEXT();
+        else funcdef();
     }
+    SKIP(T_END);
+    if (C.curtok != zvsize(C.tokens)) error("unexpected extra input");
 }
 
 int zept_run(char* code)
 {
     int ret;
-    if (setjmp(errBuf) == 0)
+    memset(&C, 0, sizeof(C));
+    C.input = code;
+    int allocSize = 1<<17;
+    if (setjmp(C.errBuf) == 0)
     {
-        cur = file = lastTokLoc = code;
-        indentLevel = tok = 0;
-        ident = 0;
-        errorText[0] = 0;
-        codeseg = codep = mmap(0, ALLOC_SIZE, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        tokenize();
+#if 0
+        { int j;
+        for (j = 0; j < zvsize(C.tokens); ++j)
+        {
+            if (C.tokens[j].type == T_NUM)
+                printf("%d: %d %d\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
+            else
+                printf("%d: %d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
+        }}
+#endif
+        C.codeseg = C.codep = mmap(0, allocSize, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         g_prolog();
-        inp();
-        toplevel();
+        fileinput();
         g_leave();
         g_ret();
-        ret = ((int (*)())entry)();
+        ret = ((int (*)())C.entry)();
     }
     else
     {
         ret = -1;
     }
-    sbfree(ident);
-    munmap(codeseg, ALLOC_SIZE);
+    munmap(C.codeseg, allocSize);
     return ret;
 }
