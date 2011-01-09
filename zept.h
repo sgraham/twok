@@ -1,5 +1,5 @@
 /* zept-0.10 - public domain, pythonish script lang - http://h4ck3r.net/zept.h
- *                                   no warranty implied; use at your own risk
+ *                                  No warranty implied; use at your own risk.
  *
  * goals:
  * - native compile on x64
@@ -17,7 +17,6 @@
 #include <stdarg.h>
 #include <setjmp.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <ctype.h>
 
 typedef struct Token {
@@ -373,6 +372,16 @@ void fileinput()
     if (C.curtok != zvsize(C.tokens)) error("unexpected extra input");
 }
 
+#if __unix__
+#include <sys/mman.h>
+static void* zept_allocExec(int size) { return mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
+static void zept_freeExec(void* p, int size) { munmap(p, size); }
+#elif _WIN32
+#include <windows.h>
+static void* zept_allocExec(int size) { error("todo;"); }
+static void zept_freeExec(void* p, int size) { error("todo;"); }
+#endif
+
 int zept_run(char* code)
 {
     int ret;
@@ -392,7 +401,7 @@ int zept_run(char* code)
                 printf("%d: %d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
         }}
 #endif
-        C.codeseg = C.codep = mmap(0, allocSize, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
 #if 0 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
@@ -408,6 +417,6 @@ int zept_run(char* code)
         ret = -1;
     }
     zvfree(C.tokens);
-    munmap(C.codeseg, allocSize);
+    zept_freeExec(C.codeseg, allocSize);
     return ret;
 }
