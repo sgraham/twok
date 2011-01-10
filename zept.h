@@ -163,8 +163,8 @@ static void error(char *fmt, ...)
  */
 
 #define KWS " if elif else or for def return mod and not print pass << >> <= >= == != "
-#define KW(k) (strstr(KWS, #k " ") - KWS)
-enum { T_UNK, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
+#define KW(k) ((strstr(KWS, #k " ") - KWS) + T_KW)
+enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
 static Token* tokSetStr(Token* t, char* str)
 {
     if (strlen(str) >= sizeof(t->data.str)) error("identifer too long");
@@ -239,7 +239,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
                 else
                 {
                     tok = T_IDENT;
-                    if (strstr(KWS, ident)) tok = strstr(KWS, ident) - KWS;
+                    if (strstr(KWS, ident)) tok = strstr(KWS, ident) - KWS + T_KW;
                     TOKI(tok, ident);
                 }
             }
@@ -341,17 +341,28 @@ static void g_cmp(int CC)
 #define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK.data.str); NEXT(); } while(0)
 
-static void atom()
+static void atom(int lval)
 {
     if (CURTOKt == T_NUM)
     {
+        if (lval) error("expecting lval, got num");
         g_loadconst32(CURTOK.data.tokn);
+        NEXT();
+    }
+    else if (CURTOKt == T_IDENT)
+    {
+        if (lval)
+            /* address of */
+            g_loadconst32(0);
+        else
+            /* value at */
+            g_loadconst32(0);
         NEXT();
     }
     else error("unexpected atom");
 }
 
-static void comparison()
+static void comparison(int lval)
 {
     struct { char op; char cc; } cmptoks[] = { /* rhs is very platform-specific, the setcc op for each */
         { '<',    0xc },
@@ -362,14 +373,64 @@ static void comparison()
         { KW(!=), 5 },
     };
     int cmptoki;
-    atom();
+    atom(lval);
     while ((cmptoki = zvfindnp(cmptoks, CURTOKt, 6, 1)) != -1)
     {
         NEXT();
         g_save();
-        atom();
+        atom(lval);
         g_restorealt();
         g_cmp(cmptoks[cmptoki].cc);
+    }
+}
+
+static void not_test(int lval)
+{
+    if (CURTOKt == KW(not))
+    {
+        SKIP(KW(not));
+        not_test(lval);
+    }
+    else
+        comparison(lval);
+}
+
+static void and_test(int lval)
+{
+    not_test(lval);
+    while (CURTOKt == KW(and))
+    {
+        SKIP(KW(and));
+        error("todo;");
+        not_test(lval);
+    }
+}
+
+static void or_test(int lval)
+{
+    and_test(lval);
+    while (CURTOKt == KW(or))
+    {
+        SKIP(KW(or));
+        error("todo;");
+        and_test(lval);
+    }
+}
+static void expr_stmt()
+{
+    /* we don't know if we want an lval here because we can't peek to see if
+     * there's an '='. we don't want to disallow naked rvals, or retval of
+     * func couldn't be ignored. so, instead of just loading the thing we're
+     * looking for into a scratch register */
+    or_test(1);
+    /* todo; should be while, not if. need to re-get lval after tho */
+    if (CURTOKt == '=')
+    {
+        SKIP('=');
+        g_save();
+        or_test(0);
+        g_restorealt();
+        /*g_store();*/
     }
 }
 
@@ -396,7 +457,7 @@ static void stmt()
     else if (CURTOKt == KW(if))
     {
         SKIP(KW(if));
-        comparison();
+        comparison(0);
         offtest = g_test(0, 0);
         suite();
         offdone = g_jmp(offdone);
@@ -406,7 +467,7 @@ static void stmt()
             NEXT();
             if (PREVTOK.type == KW(elif))
             {
-                comparison();
+                comparison(0);
                 offtest = g_test(0, 0);
             }
             else offtest = 0;
@@ -417,13 +478,10 @@ static void stmt()
                 g_fixup(offtest);
             }
         }
-        /* TODO, this is broken, happens to work in tests because the body of
-         * the elifs do return. need to jump all blocks to offdone, but
-         * currently on the first one does */
         g_fixup(offdone);
     }
     else if (CURTOKt == T_NL) error("bad indent");
-    else error("expected stmt");
+    else expr_stmt();
 }
 
 static void suite()
@@ -483,7 +541,7 @@ int zeptRun(char* code)
     if (setjmp(C.errBuf) == 0)
     {
         tokenize();
-#if 0 /* dump tokens generated from stream */
+#if 1 /* dump tokens generated from stream */
         { int j;
         for (j = 0; j < zvsize(C.tokens); ++j)
         {
@@ -495,7 +553,7 @@ int zeptRun(char* code)
 #endif
         C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
-#if 0 /* dump disassembly of generated code, needs ndisasm in path */
+#if 1 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);

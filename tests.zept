@@ -115,6 +115,16 @@ def __main__():
         return 3
     return 4
 
+### -1 expecting lval
+def __main__():
+    4 = 5
+
+### 41 assign
+def __main__():
+    x = 41
+    999
+    return x
+
 ### 99999 END
 
 # vim: set ft=python:
