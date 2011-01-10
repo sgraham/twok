@@ -293,8 +293,10 @@ enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running i
     for (i = 0; i < REG_SIZE; ++i) { ob((_&mask)>>sh); mask <<= 8; sh += 8; } }
 #define get32(p) (*(int*)p)
 
-static void g_rval(int reg)
+/* can request a specific register or R_ANY. returned will be a specific one. */
+static int g_rval(int regcat)
 {
+    int reg = regcat;
     if (zvlast(C.vst).type & V_CONST)
     {
         /* mov reg, const */
@@ -304,6 +306,9 @@ static void g_rval(int reg)
     }
     else if (zvlast(C.vst).type & V_CMP)
     {
+        /* clear reg, can't xor that sets flags */
+        ob(0xb8 + reg);
+        outnum(0);
         /* setxx */
         ob(0x0f);
         ob(0x90 + zvlast(C.vst).data.i);
@@ -318,6 +323,7 @@ static void g_rval(int reg)
     {
         error("internal error, unexpected stack state");
     }
+    return reg;
 }
 
 static void g_prolog()
@@ -350,8 +356,8 @@ static char* g_jmp(char* prev)
 /* NZ is 0/1 for Z/NZ test. see note about prev above. */
 static char* g_test(int NZ, char* prev)
 {
-    g_rval(0);
-    ob(0x85); ob(0xc0); /* test eax, eax */
+    int reg = g_rval(R_ANY);
+    ob(0x85); ob(0xc0 + reg * 9); /* test eXx, eXx */
     ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
     outnum(prev);
     return C.codep - 4;
