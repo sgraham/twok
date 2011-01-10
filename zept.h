@@ -354,7 +354,7 @@ static void comparison()
 
 static void stmt()
 {
-    char *off0;
+    char *off0, *off1;
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
@@ -374,12 +374,13 @@ static void stmt()
         off0 = g_test(0);
         suite();
         g_fixup(off0);
-        /*
+        off1 = 0;
         while (CURTOKt == KW(elif))
         {
             comparison();
             suite();
         }
+        /*
         if (CURTOKt == KW(else))
             suite();
         */
@@ -445,7 +446,7 @@ int zeptRun(char* code)
     if (setjmp(C.errBuf) == 0)
     {
         tokenize();
-#if 0 /* dump tokens generated from stream */
+#if 1 /* dump tokens generated from stream */
         { int j;
         for (j = 0; j < zvsize(C.tokens); ++j)
         {

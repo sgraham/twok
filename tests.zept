@@ -80,6 +80,31 @@ def __main__(): # suffix comment
     return 13 # another
 # more
 
-### 0 END
+
+### 1 elif
+def __main__():
+    if 1:
+        return 1
+    elif 1:
+        return 2
+    return 3
+
+### 2 elif
+def __main__():
+    if 0:
+        return 1
+    elif 1:
+        return 2
+    return 3
+
+### 3 elif
+def __main__():
+    if 0:
+        return 1
+    elif 0:
+        return 2
+    return 3
+
+### 99999 END
 
 # vim: set ft=python:
