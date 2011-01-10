@@ -42,6 +42,7 @@ extern int zeptRun(char* code);
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <setjmp.h>
 #include <string.h>
 #include <ctype.h>
@@ -161,7 +162,7 @@ static void error(char *fmt, ...)
  * tokenize. build a zv of Token's for rest. indent/dedent is a bit icky.
  */
 
-#define KWS " if elif else or for def return mod and not print << >> <= >= == != "
+#define KWS " if elif else or for def return mod and not print pass << >> <= >= == != "
 #define KW(k) (strstr(KWS, #k " ") - KWS)
 enum { T_UNK, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
 static Token* tokSetStr(Token* t, char* str)
@@ -269,7 +270,8 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
  * code generation 
  */
 #define ob(b) (*C.codep++ = b)
-#define out32(n) do { int _ = (n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
+#define out32(n) do { int _ = (uintptr_t)(n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
+#define get32(p) (*(int*)p)
 
 static void g_loadconst32(int n)
 {
@@ -287,24 +289,35 @@ static void g_leave_ret() { ob(0xc9); ob(0xc3); } /* leave; ret */
 
 #define put32(p, n) (*(int*)(p) = (n))
 
-static char* g_test(int NZ)
+/* emit a jump, returns the location that needs to be fixed up. make a linked
+ * list to previous items that are going to jump to the same final location so
+ * that when the jump target is reached we can fix them all up by walking the
+ * list that we created. */
+static char* g_jmp(char* prev)
+{
+    ob(0xe9);
+    out32(prev);
+    return C.codep - 4;
+}
+
+/* NZ is 0/1 for Z/NZ test. see note about prev above. */
+static char* g_test(int NZ, char* prev)
 {
     ob(0x85); ob(0xc0); /* test eax, eax */
     ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
-    out32(0);
+    out32(prev);
     return C.codep - 4;
 }
 
-static char* g_jmp()
-{
-    ob(0xe9);
-    out32(0);
-    return C.codep - 4;
-}
 
 static void g_fixup1(char* p, char* to)
 {
-    put32(p, to - p - 4);
+    while (p)
+    {
+        char* tmp = (char*)(uintptr_t)get32(p); /* next value in the list before we overwrite it */
+        put32(p, to - p - 4);
+        p = tmp;
+    }
 }
 
 static void g_fixup(char* p) { g_fixup1(p, C.codep); }
@@ -362,7 +375,7 @@ static void comparison()
 
 static void stmt()
 {
-    char *offdone, *offtest;
+    char *offdone = 0, *offtest = 0;
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
@@ -375,13 +388,18 @@ static void stmt()
         SKIP(KW(print));
         NEXT();
     }
+    else if (CURTOKt == KW(pass))
+    {
+        NEXT();
+        /* nothing */
+    }
     else if (CURTOKt == KW(if))
     {
         SKIP(KW(if));
         comparison();
-        offtest = g_test(0);
+        offtest = g_test(0, 0);
         suite();
-        offdone = g_jmp();
+        offdone = g_jmp(offdone);
         g_fixup(offtest);
         while (CURTOKt == KW(elif) || CURTOKt == KW(else))
         {
@@ -389,11 +407,15 @@ static void stmt()
             if (PREVTOK.type == KW(elif))
             {
                 comparison();
-                offtest = g_test(0);
+                offtest = g_test(0, 0);
             }
             else offtest = 0;
             suite();
-            if (offtest) g_fixup(offtest);
+            if (offtest)
+            {
+                offdone = g_jmp(offdone);
+                g_fixup(offtest);
+            }
         }
         /* TODO, this is broken, happens to work in tests because the body of
          * the elifs do return. need to jump all blocks to offdone, but

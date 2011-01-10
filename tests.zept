@@ -105,12 +105,12 @@ def __main__():
         return 2
     return 3
 
-### 2 elif
+### 4 elif
 def __main__():
     if 0:
         return 1
     elif 1:
-        return 2
+        pass
     elif 1:
         return 3
     return 4
