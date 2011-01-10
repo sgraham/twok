@@ -59,7 +59,7 @@ int main(int argc, char** argv)
         failCount += failed;
         passCount += !failed;
 #ifdef VERBOSE
-        if (failed)
+        //if (failed)
         {
             printf("\n------------------------\n%s------------------------\n", curtest);
             printf("rc=%d, want=%d, desc='%s'\n%s%s\n\n", ret, expectedRC, description,

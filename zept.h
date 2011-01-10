@@ -55,10 +55,21 @@ typedef struct Token {
     } data;
 } Token;
 
+typedef struct Value {
+    int type;
+    union {
+        int i;
+        char* addr;
+    } data;
+} Value;
+enum { V_CONST, V_LVAL };
+#define VAL(t, d) { Value _ = { t, { d } }; zvpush(C.vst, _); }
+
 typedef struct Context {
     Token* tokens;
     int curtok;
-    char *input, *codeseg, *codep, *entry;
+    char *input, *codeseg, *codep, *entry, *funcexit;
+    Value* vst;
     jmp_buf errBuf;
     char errorText[512];
 } Context;
@@ -217,8 +228,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
         }
         while (column < zvlast(indents))
         {
-            if (!zvcontains(indents, column))
-                error("unindent does not match any outer indentation level");
+            if (!zvcontains(indents, column)) error("unindent does not match any outer indentation level");
             zvpop(indents);
             TOK(T_DEDENT);
         }
@@ -275,8 +285,9 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 
 static void g_loadconst32(int n)
 {
-    ob(0xb8); /* mov eax, N */
+    ob(0x68); /* push xxx */
     out32(n);
+    zvpush(C.vst, VAL(V_CONST, n));
 }
 
 static void g_prolog()
@@ -285,7 +296,13 @@ static void g_prolog()
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
 }
 
-static void g_leave_ret() { ob(0xc9); ob(0xc3); } /* leave; ret */
+static void g_leave_ret()
+{
+    ob(0x58); /* pop eax */
+    zvpop(C.vst);
+    ob(0xc9); /* leave */
+    ob(0xc3); /* ret */
+} 
 
 #define put32(p, n) (*(int*)(p) = (n))
 
@@ -303,6 +320,7 @@ static char* g_jmp(char* prev)
 /* NZ is 0/1 for Z/NZ test. see note about prev above. */
 static char* g_test(int NZ, char* prev)
 {
+    ob(0x58); zvpop(C.vst);
     ob(0x85); ob(0xc0); /* test eax, eax */
     ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
     out32(prev);
@@ -328,10 +346,20 @@ static void g_restorealt() { ob(0x59); } /* pop ecx */
 
 static void g_cmp(int CC)
 {
+    ob(0x59); ob(0x58); /* pop ecx; pop eax */
     ob(0x39); ob(0xc1); /* cmp ecx, eax */
-    g_loadconst32(0);
+    ob(0xb8); out32(0); /* mov eax, 0 */
     ob(0x0f); ob(0x90 + CC); /* setxx al */
     ob(0xc0);
+}
+
+static void g_dup()
+{
+    ob(0x58); ob(0x50); ob(0x50); /* pop eax; push eax; push eax. todo; should be push [esp]? */
+}
+
+static void g_store()
+{
 }
 
 
@@ -341,28 +369,22 @@ static void g_cmp(int CC)
 #define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK.data.str); NEXT(); } while(0)
 
-static void atom(int lval)
+static void atom()
 {
     if (CURTOKt == T_NUM)
     {
-        if (lval) error("expecting lval, got num");
         g_loadconst32(CURTOK.data.tokn);
         NEXT();
     }
     else if (CURTOKt == T_IDENT)
     {
-        if (lval)
-            /* address of */
-            g_loadconst32(0);
-        else
-            /* value at */
-            g_loadconst32(0);
+        g_loadconst32(0);
         NEXT();
     }
     else error("unexpected atom");
 }
 
-static void comparison(int lval)
+static void comparison()
 {
     struct { char op; char cc; } cmptoks[] = { /* rhs is very platform-specific, the setcc op for each */
         { '<',    0xc },
@@ -373,64 +395,56 @@ static void comparison(int lval)
         { KW(!=), 5 },
     };
     int cmptoki;
-    atom(lval);
+    atom();
     while ((cmptoki = zvfindnp(cmptoks, CURTOKt, 6, 1)) != -1)
     {
         NEXT();
-        g_save();
-        atom(lval);
-        g_restorealt();
+        atom();
         g_cmp(cmptoks[cmptoki].cc);
     }
 }
 
-static void not_test(int lval)
+static void not_test()
 {
     if (CURTOKt == KW(not))
     {
         SKIP(KW(not));
-        not_test(lval);
+        not_test();
     }
     else
-        comparison(lval);
+        comparison();
 }
 
-static void and_test(int lval)
+static void and_test()
 {
-    not_test(lval);
+    not_test();
     while (CURTOKt == KW(and))
     {
         SKIP(KW(and));
         error("todo;");
-        not_test(lval);
+        not_test();
     }
 }
 
-static void or_test(int lval)
+static void or_test()
 {
-    and_test(lval);
+    and_test();
     while (CURTOKt == KW(or))
     {
         SKIP(KW(or));
         error("todo;");
-        and_test(lval);
+        and_test();
     }
 }
 static void expr_stmt()
 {
-    /* we don't know if we want an lval here because we can't peek to see if
-     * there's an '='. we don't want to disallow naked rvals, or retval of
-     * func couldn't be ignored. so, instead of just loading the thing we're
-     * looking for into a scratch register */
-    or_test(1);
-    /* todo; should be while, not if. need to re-get lval after tho */
-    if (CURTOKt == '=')
+    or_test();
+    while (CURTOKt == '=')
     {
-        SKIP('=');
-        g_save();
-        or_test(0);
-        g_restorealt();
-        /*g_store();*/
+        NEXT();
+        or_test();
+        //if (CURTOKt == '=') g_dup();
+        g_store();
     }
 }
 
@@ -441,8 +455,8 @@ static void stmt()
     {
         SKIP(KW(return));
         g_loadconst32(CURTOK.data.tokn);
-        g_leave_ret();
         NEXT();
+        C.funcexit = g_jmp(C.funcexit);
     }
     else if (CURTOKt == KW(print))
     {
@@ -457,7 +471,7 @@ static void stmt()
     else if (CURTOKt == KW(if))
     {
         SKIP(KW(if));
-        comparison(0);
+        comparison();
         offtest = g_test(0, 0);
         suite();
         offdone = g_jmp(offdone);
@@ -467,7 +481,7 @@ static void stmt()
             NEXT();
             if (PREVTOK.type == KW(elif))
             {
-                comparison(0);
+                comparison();
                 offtest = g_test(0, 0);
             }
             else offtest = 0;
@@ -499,11 +513,13 @@ static void funcdef()
 {
     SKIP(KW(def));
     SKIP(T_IDENT);
+    C.funcexit = 0;
     if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
     SKIP('(');
     SKIP(')');
     g_prolog();
     suite();
+    g_fixup(C.funcexit);
     g_leave_ret();
 }
 
@@ -567,6 +583,7 @@ int zeptRun(char* code)
         ret = -1;
     }
     zvfree(C.tokens);
+    zvfree(C.vst);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }
