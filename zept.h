@@ -109,6 +109,7 @@ static int zv__zvfind(char* arr, char* find, int itemsize, int n, int partialsiz
     return -1;
 }
 
+#define PREVTOK (C.tokens[C.curtok - 1])
 #define CURTOK (C.tokens[C.curtok])
 #define CURTOKt (CURTOK.type)
 
@@ -294,6 +295,13 @@ static char* g_test(int NZ)
     return C.codep - 4;
 }
 
+static char* g_jmp()
+{
+    ob(0xe9);
+    out32(0);
+    return C.codep - 4;
+}
+
 static void g_fixup1(char* p, char* to)
 {
     put32(p, to - p - 4);
@@ -354,7 +362,7 @@ static void comparison()
 
 static void stmt()
 {
-    char *off0, *off1;
+    char *offdone, *offtest;
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
@@ -371,19 +379,26 @@ static void stmt()
     {
         SKIP(KW(if));
         comparison();
-        off0 = g_test(0);
+        offtest = g_test(0);
         suite();
-        g_fixup(off0);
-        off1 = 0;
-        while (CURTOKt == KW(elif))
+        offdone = g_jmp();
+        g_fixup(offtest);
+        while (CURTOKt == KW(elif) || CURTOKt == KW(else))
         {
-            comparison();
+            NEXT();
+            if (PREVTOK.type == KW(elif))
+            {
+                comparison();
+                offtest = g_test(0);
+            }
+            else offtest = 0;
             suite();
+            if (offtest) g_fixup(offtest);
         }
-        /*
-        if (CURTOKt == KW(else))
-            suite();
-        */
+        /* TODO, this is broken, happens to work in tests because the body of
+         * the elifs do return. need to jump all blocks to offdone, but
+         * currently on the first one does */
+        g_fixup(offdone);
     }
     else if (CURTOKt == T_NL) error("bad indent");
     else error("expected stmt");
@@ -404,7 +419,7 @@ static void funcdef()
 {
     SKIP(KW(def));
     SKIP(T_IDENT);
-    if (strcmp(C.tokens[C.curtok - 1].data.str, "__main__") == 0) C.entry = C.codep;
+    if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
     SKIP('(');
     SKIP(')');
     g_prolog();
@@ -458,7 +473,7 @@ int zeptRun(char* code)
 #endif
         C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
-#if 0 /* dump disassembly of generated code, needs ndisasm in path */
+#if 1 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
