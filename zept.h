@@ -461,7 +461,7 @@ int zeptRun(char* code)
     if (setjmp(C.errBuf) == 0)
     {
         tokenize();
-#if 1 /* dump tokens generated from stream */
+#if 0 /* dump tokens generated from stream */
         { int j;
         for (j = 0; j < zvsize(C.tokens); ++j)
         {
@@ -473,7 +473,7 @@ int zeptRun(char* code)
 #endif
         C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
-#if 1 /* dump disassembly of generated code, needs ndisasm in path */
+#if 0 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
