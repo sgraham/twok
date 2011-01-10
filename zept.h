@@ -1,4 +1,4 @@
-/* zept-0.10 - public domain, pythonish script lang - http://h4ck3r.net/zept.h
+/* zept-0.10 - public domain, python-ish script lang - http://h4ck3r.net/#Zept
    Scott Graham 2011 <scott.zept@h4ck3r.net>
                                     No warranty implied; use at your own risk.
 
@@ -22,6 +22,12 @@ TODO:
 
     everything
 
+
+NOTES: (mostly internal)
+
+    register usage:
+
+
 */
 
 #ifndef INCLUDED_ZEPT_H
@@ -43,6 +49,7 @@ extern int zeptRun(char* code);
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <assert.h>
 #include <setjmp.h>
 #include <string.h>
 #include <ctype.h>
@@ -62,13 +69,15 @@ typedef struct Value {
         char* addr;
     } data;
 } Value;
-enum { V_CONST, V_LVAL };
-#define VAL(t, d) { Value _ = { t, { d } }; zvpush(C.vst, _); }
+enum { V_CONST = 0x1, V_LVAL = 0x2, V_CMP = 0x4 };
+enum { R_0 = 0, R_1 = 1, R_2 = 2, R_ANY };
+#define VAL(t, d) do { Value _ = { (t), { (d) } }; if (zvsize(C.vst) && zvlast(C.vst).type == V_CMP) g_rval(R_ANY); zvpush(C.vst, _); } while(0)
 
 typedef struct Context {
     Token* tokens;
-    int curtok;
-    char *input, *codeseg, *codep, *entry, *funcexit;
+    Token** locals;   /* array of pointers to above (which won't be realloced at this point), index is offset from rbp */
+    int curtok, scanningForLocals;
+    char *input, *codeseg, *codep, *entry;
     Value* vst;
     jmp_buf errBuf;
     char errorText[512];
@@ -77,7 +86,6 @@ typedef struct Context {
 static Context C;
 static void suite();
 
-
 /*
  * misc utilities.
  */
@@ -85,7 +93,7 @@ static void suite();
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
 #define zvfree(a)                   ((a) ? free(zv__zvraw(a)),(void*)0 : (void*)0)
 #define zvpush(a,v)                 (zv__zvmaybegrow(a,1), (a)[zv__zvn(a)++] = (v))
-#define zvpop(a)                    (zv__zvn(a)-=1)
+#define zvpop(a)                    (assert(zv__zvn(a) > 0), zv__zvn(a)-=1)
 #define zvsize(a)                   ((a) ? zv__zvn(a) : 0)
 /*#define zvadd(a,n)                  (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])*/
 #define zvlast(a)                   ((a)[zv__zvn(a)-1])
@@ -279,27 +287,49 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 /*
  * code generation 
  */
-#define ob(b) (*C.codep++ = b)
-#define out32(n) do { int _ = (uintptr_t)(n); ob(_&0xff); ob((_&0xff00)>>8); ob((_&0xff0000)>>16); ob((_&0xff000000)>>24); } while(0);
+enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
+#define ob(b) do { if (!C.scanningForLocals) *C.codep++ = (b); } while(0)
+#define outnum(n) { uintptr_t _ = (uintptr_t)n; uintptr_t mask = 0xff; uintptr_t sh = 0; int i; \
+    for (i = 0; i < REG_SIZE; ++i) { ob((_&mask)>>sh); mask <<= 8; sh += 8; } }
 #define get32(p) (*(int*)p)
 
-static void g_loadconst32(int n)
+static void g_rval(int reg)
 {
-    ob(0x68); /* push xxx */
-    out32(n);
-    zvpush(C.vst, VAL(V_CONST, n));
+    if (zvlast(C.vst).type & V_CONST)
+    {
+        /* mov reg, const */
+        ob(0xb8 + reg);
+        outnum(zvlast(C.vst).data.i);
+        zvpop(C.vst);
+    }
+    else if (zvlast(C.vst).type & V_CMP)
+    {
+        /* setxx */
+        ob(0x0f);
+        ob(0x90 + zvlast(C.vst).data.i);
+        ob(0xc0 + reg);
+        zvpop(C.vst);
+    }
+    else if (zvlast(C.vst).type == V_LVAL)
+    {
+        error("todo;");
+    }
+    else
+    {
+        error("internal error, unexpected stack state");
+    }
 }
 
 static void g_prolog()
 {
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
+    VAL(V_CONST, 0); /* for fall off ret */
 }
 
 static void g_leave_ret()
 {
-    ob(0x58); /* pop eax */
-    zvpop(C.vst);
+    g_rval(R_0);
     ob(0xc9); /* leave */
     ob(0xc3); /* ret */
 } 
@@ -313,23 +343,24 @@ static void g_leave_ret()
 static char* g_jmp(char* prev)
 {
     ob(0xe9);
-    out32(prev);
+    outnum(prev);
     return C.codep - 4;
 }
 
 /* NZ is 0/1 for Z/NZ test. see note about prev above. */
 static char* g_test(int NZ, char* prev)
 {
-    ob(0x58); zvpop(C.vst);
+    g_rval(0);
     ob(0x85); ob(0xc0); /* test eax, eax */
     ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
-    out32(prev);
+    outnum(prev);
     return C.codep - 4;
 }
 
 
 static void g_fixup1(char* p, char* to)
 {
+    if (C.scanningForLocals) return;
     while (p)
     {
         char* tmp = (char*)(uintptr_t)get32(p); /* next value in the list before we overwrite it */
@@ -340,22 +371,19 @@ static void g_fixup1(char* p, char* to)
 
 static void g_fixup(char* p) { g_fixup1(p, C.codep); }
 
-static void g_save() { ob(0x50); } /* push eax */
-
-static void g_restorealt() { ob(0x59); } /* pop ecx */
-
+/* compares the two tops of the stack and pushes the result flag */
 static void g_cmp(int CC)
 {
-    ob(0x59); ob(0x58); /* pop ecx; pop eax */
+    g_rval(R_0);
+    g_rval(R_1);
     ob(0x39); ob(0xc1); /* cmp ecx, eax */
-    ob(0xb8); out32(0); /* mov eax, 0 */
-    ob(0x0f); ob(0x90 + CC); /* setxx al */
-    ob(0xc0);
+    VAL(V_CMP, CC);
 }
 
 static void g_dup()
 {
     ob(0x58); ob(0x50); ob(0x50); /* pop eax; push eax; push eax. todo; should be push [esp]? */
+    zvpush(C.vst, zvlast(C.vst));
 }
 
 static void g_store()
@@ -373,12 +401,12 @@ static void atom()
 {
     if (CURTOKt == T_NUM)
     {
-        g_loadconst32(CURTOK.data.tokn);
+        VAL(V_CONST, CURTOK.data.tokn);
         NEXT();
     }
     else if (CURTOKt == T_IDENT)
     {
-        g_loadconst32(0);
+        VAL(V_CONST, 0);
         NEXT();
     }
     else error("unexpected atom");
@@ -454,9 +482,9 @@ static void stmt()
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
-        g_loadconst32(CURTOK.data.tokn);
-        NEXT();
-        C.funcexit = g_jmp(C.funcexit);
+        if (CURTOKt == T_DEDENT) VAL(V_CONST, 20710);
+        else or_test();
+        g_leave_ret();
     }
     else if (CURTOKt == KW(print))
     {
@@ -511,15 +539,23 @@ static void suite()
 
 static void funcdef()
 {
+    int fstart;
     SKIP(KW(def));
     SKIP(T_IDENT);
-    C.funcexit = 0;
     if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
     SKIP('(');
     SKIP(')');
+
+    fstart = C.curtok;
+    C.scanningForLocals = 1;
+    C.locals = zvfree(C.locals);
+    suite();
+
+    C.curtok = fstart;
+    C.scanningForLocals = 0;
+
     g_prolog();
     suite();
-    g_fixup(C.funcexit);
     g_leave_ret();
 }
 
@@ -531,7 +567,6 @@ static void fileinput()
         else funcdef();
     }
     SKIP(T_END);
-    if (C.curtok != zvsize(C.tokens)) error("unexpected extra input");
 }
 
 #if __unix__ || (__APPLE__ && __MACH__)
@@ -557,7 +592,7 @@ int zeptRun(char* code)
     if (setjmp(C.errBuf) == 0)
     {
         tokenize();
-#if 1 /* dump tokens generated from stream */
+#if 0 /* dump tokens generated from stream */
         { int j;
         for (j = 0; j < zvsize(C.tokens); ++j)
         {
@@ -584,6 +619,7 @@ int zeptRun(char* code)
     }
     zvfree(C.tokens);
     zvfree(C.vst);
+    zvfree(C.locals);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }

@@ -1,6 +1,9 @@
 ### 42 trivial
 def __main__():
     return 42
+### 0 trivial 2
+def __main__():
+    pass
 ### -1 line 3, col 9
 def __main__():
     return 33
@@ -122,6 +125,11 @@ def __main__():
 ### 20710 no val return
 def __main__():
     return
+
+### -1 unexpected
+def __main__():
+    return
+    return 19
 
 ### 41 assign
 def __main__():
