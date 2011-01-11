@@ -382,6 +382,7 @@ static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
+    ob(0x48); ob(0x81); ob(0xec); outnum(256); /* sub rsp, 100 */ /* todo; XXX hardcoded 64 locals */
     VAL(V_CONST, 0); /* for fall off ret */
 }
 
@@ -440,120 +441,6 @@ static void i_label(char* p)
 /*static void i_math(Value* v) {} */
 
 #endif
-
-#if 0
-/*
- * code generation 
- */
-enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
-#define ob(b) (*C.codep++ = (b))
-#define outnum(n) { uintptr_t _ = (uintptr_t)n; uintptr_t mask = 0xff; uintptr_t sh = 0; int i; \
-    for (i = 0; i < REG_SIZE; ++i) { ob((_&mask)>>sh); mask <<= 8; sh += 8; } }
-#define get32(p) (*(int*)p)
-
-/* can request a specific register or R_ANY. returned will be a specific one. */
-static int g_rval(int regcat)
-{
-    int reg = regcat;
-    if (zvlast(C.vst).type & V_CONST)
-    {
-        /* mov reg, const */
-        ob(0xb8 + reg);
-        outnum(zvlast(C.vst).data.i);
-        zvpop(C.vst);
-    }
-    else if (zvlast(C.vst).type & V_CMP)
-    {
-        /* clear reg, can't xor that sets flags */
-        ob(0xb8 + reg);
-        outnum(0);
-        /* setxx */
-        ob(0x0f);
-        ob(0x90 + zvlast(C.vst).data.i);
-        ob(0xc0 + reg);
-        zvpop(C.vst);
-    }
-    else if (zvlast(C.vst).type == V_LVAL)
-    {
-        error("todo;");
-    }
-    else
-    {
-        error("internal error, unexpected stack state");
-    }
-    return reg;
-}
-
-static void g_prolog()
-{
-    ob(0x55); /* push rbp */
-    ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
-    VAL(V_CONST, 0); /* for fall off ret */
-}
-
-static void g_leave_ret()
-{
-    g_rval(R_0);
-    ob(0xc9); /* leave */
-    ob(0xc3); /* ret */
-} 
-
-#define put32(p, n) (*(int*)(p) = (n))
-
-/* emit a jump, returns the location that needs to be fixed up. make a linked
- * list to previous items that are going to jump to the same final location so
- * that when the jump target is reached we can fix them all up by walking the
- * list that we created. */
-static char* g_jmp(char* prev)
-{
-    ob(0xe9);
-    outnum(prev);
-    return C.codep - 4;
-}
-
-/* NZ is 0/1 for Z/NZ test. see note about prev above. */
-static char* g_test(int NZ, char* prev)
-{
-    int reg = g_rval(R_ANY);
-    ob(0x85); ob(0xc0 + reg * 9); /* test eXx, eXx */
-    ob(0x0f); ob(0x84 + NZ); /* jz/jnz rrr */
-    outnum(prev);
-    return C.codep - 4;
-}
-
-
-static void g_fixup1(char* p, char* to)
-{
-    while (p)
-    {
-        char* tmp = (char*)(uintptr_t)get32(p); /* next value in the list before we overwrite it */
-        put32(p, to - p - 4);
-        p = tmp;
-    }
-}
-
-static void g_fixup(char* p) { g_fixup1(p, C.codep); }
-
-/* compares the two tops of the stack and pushes the result flag */
-static void g_cmp(int CC)
-{
-    g_rval(R_0);
-    g_rval(R_1);
-    ob(0x39); ob(0xc1); /* cmp ecx, eax */
-    VAL(V_CMP, CC);
-}
-
-static void g_dup()
-{
-    ob(0x58); ob(0x50); ob(0x50); /* pop eax; push eax; push eax. todo; should be push [esp]? */
-    zvpush(C.vst, zvlast(C.vst));
-}
-
-static void g_store()
-{
-}
-#endif
-
 
 /*
  * parsing and intermediate gen
@@ -629,9 +516,8 @@ static void or_test()
 }
 static void expr_stmt()
 {
-    printf("HAY\n");
     or_test();
-    while (CURTOKt == '=')
+    if (CURTOKt == '=')
     {
         NEXT();
         or_test();
