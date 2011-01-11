@@ -66,22 +66,24 @@ typedef struct Token {
 
 typedef struct Value {
     union {
+        uintptr_t _;
         int type;
         void (*handler)(struct Value*);
     };
     union {
+        uintptr_t _;
         int i;
         char* p;
     } data;
     int label;
 } Value;
-enum { V_CONST = 0x1, V_LVAL = 0x2, V_CMP = 0x4 };
-enum { R_0 = 0, R_1 = 1, R_2 = 2, R_ANY };
-#define VAL(t, d) do { Value _ = { (t), { (d) } }; if (zvsize(C.vst) && zvlast(C.vst).type == V_CMP) g_rval(R_ANY); zvpush(C.vst, _); } while(0)
+enum { V_CONST, V_LVAL, V_CMP };
+#define VAL(t, d) do { Value _ = { { (t) }, { (d) } }; if (zvsize(C.vst) && zvlast(C.vst).type == V_CMP) g_rval(R_ANY); zvpush(C.vst, _); } while(0)
 
-#define INSTR2(i, d, d2) do { Value _ = { (uintptr_t)(i), { (uintptr_t)(d) }, d2 }; zvpush(C.instrs, _); } while(0)
+#define INSTR2(i, d, d2) do { Value _ = { { (uintptr_t)(i) }, { (uintptr_t)(d) }, d2 }; zvpush(C.instrs, _); } while(0)
 #define INSTR1(i, d) INSTR2(i, d, 0xbad1abe1)
 #define INSTR0(i) INSTR2(i, 0, 0)
+#define J_UNCOND 2
 
 typedef struct Context {
     Token* tokens;
@@ -297,23 +299,114 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 /*
  * backends, define one of them.
  */
-#if 1
+
+#if 0
+
 static void i_const(Value* v) { printf("%5d: const %d\n", C.irpos, v->data.i); }
 static void i_func(Value* v) { printf("%5d: func %s\n", C.irpos, ((Token*)v->data.p)->data.str); }
 static void i_ret(Value* v) { printf("%5d: ret\n", C.irpos); }
 static void i_cmp(Value* v) { printf("%5d: cmp %c%c\n", C.irpos, v->data.i < T_KW ? v->data.i : KWS[v->data.i-T_KW], v->data.i < T_KW ? ' ' : KWS[v->data.i-T_KW+1]); }
 static void i_jmpc(Value* v) { printf("%5d: jmpc %s ->%d\n", C.irpos, v->data.i == 0 ? "false" : (v->data.i == 1 ? "true" : "uncond"), C.labels[v->label]); }
-static void i_math(Value* v) { printf("%5d: math\n", C.irpos); }
+/*static void i_math(Value* v) { printf("%5d: math\n", C.irpos); }*/
 static void codegen()
 {
     printf("\n----------------------------------------\n");
     for (C.irpos = 0; C.irpos < zvsize(C.instrs); ++C.irpos) C.instrs[C.irpos].handler(&C.instrs[C.irpos]);
     printf("----------------------------------------\n");
 }
-#else
+
+#elif defined(_M_X64) || defined(__amd64__)
+
+enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
+#define ob(b) (*C.codep++ = (b))
+#define outnum(n) { uintptr_t _ = (uintptr_t)n; uintptr_t mask = 0xff; uintptr_t sh = 0; int i; \
+    for (i = 0; i < REG_SIZE; ++i) { ob((_&mask)>>sh); mask <<= 8; sh += 8; } }
+
+enum { R_EAX, R_ECX, R_EDX, R_EBX, R_ANY, R_NUMREGS = R_ANY };
+
+typedef struct NativeContext {
+    int regInUse[R_NUMREGS];
+} NativeContext;
+static NativeContext NC;
+
+static int getReg(int r)
+{
+    return r;
+}
+
+/* can request a specific register or R_ANY. returned will be a specific one. */
+static int g_rval(int regcat)
+{
+    int reg = getReg(regcat);
+    if (zvlast(C.vst).type & V_CONST)
+    {
+        /* mov reg, const */
+        ob(0xb8 + reg);
+        outnum(zvlast(C.vst).data.i);
+        zvpop(C.vst);
+    }
+    else if (zvlast(C.vst).type & V_CMP)
+    {
+        /* clear reg, can't xor as that sets flags */
+        ob(0xb8 + reg);
+        outnum(0);
+        /* setxx */
+        ob(0x0f);
+        ob(0x90 + zvlast(C.vst).data.i);
+        ob(0xc0 + reg);
+        zvpop(C.vst);
+    }
+    else if (zvlast(C.vst).type == V_LVAL)
+    {
+        error("todo;");
+    }
+    else
+    {
+        error("internal error, unexpected stack state");
+    }
+    return reg;
+}
+
+static void i_const(Value* v) { VAL(V_CONST, v->data.i); }
+static void i_func(Value* v) {
+    ob(0x55); /* push rbp */
+    ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
+    VAL(V_CONST, 0); /* for fall off ret */
+}
+static void i_ret(Value* v) {
+    g_rval(R_EAX);
+    ob(0xc9); /* leave */
+    ob(0xc3); /* ret */
+}
+
+static void i_cmp(Value* v)
+{
+    struct { char kw, cc; } cmpccs[] = {
+        { '<', 0xc },
+        { '>', 0xf },
+        { KW(<=), 0xe },
+        { KW(>=), 0xd },
+        { KW(==), 4 },
+        { KW(!=), 5 },
+    };
+    g_rval(R_EAX);
+    g_rval(R_ECX);
+    ob(0x39); ob(0xc1); /* cmp ecx, eax */
+    VAL(V_CMP, cmpccs[zvfindnp(cmpccs, v->data.i, 6, 1)].cc);;
+}
+static void i_jmpc(Value* v)
+{
+}
+/*static void i_math(Value* v) {} */
+static void codegen()
+{
+    memset(&NC, 0, sizeof(NC));
+    for (C.irpos = 0; C.irpos < zvsize(C.instrs); ++C.irpos) C.instrs[C.irpos].handler(&C.instrs[C.irpos]);
+}
+
 #endif
 
-
+#if 0
 /*
  * code generation 
  */
@@ -424,6 +517,7 @@ static void g_dup()
 static void g_store()
 {
 }
+#endif
 
 
 /*
@@ -448,7 +542,8 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        VAL(V_CONST, 0);
+        error("todo;");
+        INSTR1(i_const, 0);
         NEXT();
     }
     else error("unexpected atom");
@@ -507,8 +602,8 @@ static void expr_stmt()
     {
         NEXT();
         or_test();
-        //if (CURTOKt == '=') g_dup();
-        g_store();
+        /*if (CURTOKt == '=') g_dup();*/
+        /*g_store();*/
     }
 }
 
@@ -542,7 +637,7 @@ static void stmt()
         labeltest = alloclabel();
         INSTR2(i_jmpc, 0, labeltest);
         suite();
-        INSTR2(i_jmpc, -1, labeldone);
+        INSTR2(i_jmpc, J_UNCOND, labeldone);
         setlabel(labeltest);
 
         while (CURTOKt == KW(elif) || CURTOKt == KW(else))
@@ -558,7 +653,7 @@ static void stmt()
             suite();
             if (labeltest >= 0)
             {
-                INSTR2(i_jmpc, -1, labeldone);
+                INSTR2(i_jmpc, J_UNCOND, labeldone);
                 setlabel(labeltest);
             }
         }
@@ -636,7 +731,7 @@ int zeptRun(char* code)
         C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
         codegen();
-#if 0 /* dump disassembly of generated code, needs ndisasm in path */
+#if 1 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
