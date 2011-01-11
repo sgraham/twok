@@ -11,7 +11,7 @@ in the file that you want to have the implementation.
 
 ABOUT:
 
-    Native compile on x64, ARM (not yet)
+    Native compile on x64, ARM (not yet), or interpreted
     < 1k LOC (`sloccount zept.h`)
     No external dependencies
 
@@ -32,6 +32,7 @@ NOTES: (mostly internal)
 
 #ifndef INCLUDED_ZEPT_H
 #define INCLUDED_ZEPT_H
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +42,7 @@ extern int zeptRun(char* code);
 #ifdef __cplusplus
 }
 #endif
+
 #endif /* INCLUDED_ZEPT_H */
 
 #ifdef ZEPT_DEFINE_IMPLEMENTATION
@@ -48,8 +50,8 @@ extern int zeptRun(char* code);
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <stdint.h>
 #include <assert.h>
+#include <stddef.h>
 #include <setjmp.h>
 #include <string.h>
 #include <ctype.h>
@@ -63,22 +65,30 @@ typedef struct Token {
 } Token;
 
 typedef struct Value {
-    int type;
+    union {
+        int type;
+        void (*handler)(struct Value*);
+    };
     union {
         int i;
-        char* addr;
+        char* p;
     } data;
+    int label;
 } Value;
 enum { V_CONST = 0x1, V_LVAL = 0x2, V_CMP = 0x4 };
 enum { R_0 = 0, R_1 = 1, R_2 = 2, R_ANY };
 #define VAL(t, d) do { Value _ = { (t), { (d) } }; if (zvsize(C.vst) && zvlast(C.vst).type == V_CMP) g_rval(R_ANY); zvpush(C.vst, _); } while(0)
 
+#define INSTR2(i, d, d2) do { Value _ = { (uintptr_t)(i), { (uintptr_t)(d) }, d2 }; zvpush(C.instrs, _); } while(0)
+#define INSTR1(i, d) INSTR2(i, d, 0xbad1abe1)
+#define INSTR0(i) INSTR2(i, 0, 0)
+
 typedef struct Context {
     Token* tokens;
-    Token** locals;   /* array of pointers to above (which won't be realloced at this point), index is offset from rbp */
-    int curtok, scanningForLocals;
+    int curtok, irpos;
     char *input, *codeseg, *codep, *entry;
-    Value* vst;
+    int *labels;
+    Value *instrs, *vst;
     jmp_buf errBuf;
     char errorText[512];
 } Context;
@@ -100,6 +110,7 @@ static void suite();
 #define zvfindnp(a,i,n,psize)       (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
 #define zvcontainsnp(a,i,n,psize)   (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1)
 #define zvcontainsp(a,i,psize)      (zvcontainsnp((a),i,zv__zvn(a),psize))
+#define zvcontainsn(a,i,n)          (zvcontainsnp((a),i,n,sizeof(*(a))))
 #define zvcontains(a,i)             (zvcontainsp((a),i,sizeof(*(a))))
 
 #define zv__zvraw(a) ((int *) (a) - 2)
@@ -130,8 +141,8 @@ static int zv__zvfind(char* arr, char* find, int itemsize, int n, int partialsiz
 }
 
 #define PREVTOK (C.tokens[C.curtok - 1])
-#define CURTOK (C.tokens[C.curtok])
-#define CURTOKt (CURTOK.type)
+#define CURTOK (&C.tokens[C.curtok])
+#define CURTOKt (CURTOK->type)
 
 static void geterrpos(int offset, int* line, int* col, char** linetext)
 {
@@ -161,7 +172,7 @@ static void error(char *fmt, ...)
     va_start(ap, fmt);
     if (C.curtok < zvsize(C.tokens)) /* for errors after parse finished */
     {
-        geterrpos(CURTOK.pos, &line, &col, &text);
+        geterrpos(CURTOK->pos, &line, &col, &text);
         sprintf(C.errorText, "line %d, col %d:\n", line, col);
         eotext = text;
         while (*eotext != '\n' && *eotext != 0) ++eotext;
@@ -176,12 +187,11 @@ static void error(char *fmt, ...)
     va_end(ap);
 }
 
-
 /*
  * tokenize. build a zv of Token's for rest. indent/dedent is a bit icky.
  */
 
-#define KWS " if elif else or for def return mod and not print pass << >> <= >= == != "
+static char KWS[] = " if elif else or for def return mod and not print pass << >> <= >= == != ";
 #define KW(k) ((strstr(KWS, #k " ") - KWS) + T_KW)
 enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
 static Token* tokSetStr(Token* t, char* str)
@@ -268,8 +278,9 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
             }
             else
             {
+                char tmp[3] = { 0, 0, 0 };
                 if (!*pos) goto donestream;
-                char tmp[3] = { *pos++, 0, 0 };
+                tmp[0] = *pos++;
                 if (0) {}
                 #define twochar(t) else if (*(pos-1) == #t[0] && *pos == #t[1]) { tmp[1] = *pos++; TOKI(KW(t), tmp); }
                     twochar(<<) twochar(>>)
@@ -283,12 +294,31 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
     }
 }
 
+/*
+ * backends, define one of them.
+ */
+#if 1
+static void i_const(Value* v) { printf("%5d: const %d\n", C.irpos, v->data.i); }
+static void i_func(Value* v) { printf("%5d: func %s\n", C.irpos, ((Token*)v->data.p)->data.str); }
+static void i_ret(Value* v) { printf("%5d: ret\n", C.irpos); }
+static void i_cmp(Value* v) { printf("%5d: cmp %c%c\n", C.irpos, v->data.i < T_KW ? v->data.i : KWS[v->data.i-T_KW], v->data.i < T_KW ? ' ' : KWS[v->data.i-T_KW+1]); }
+static void i_jmpc(Value* v) { printf("%5d: jmpc %s ->%d\n", C.irpos, v->data.i == 0 ? "false" : (v->data.i == 1 ? "true" : "uncond"), C.labels[v->label]); }
+static void i_math(Value* v) { printf("%5d: math\n", C.irpos); }
+static void codegen()
+{
+    printf("\n----------------------------------------\n");
+    for (C.irpos = 0; C.irpos < zvsize(C.instrs); ++C.irpos) C.instrs[C.irpos].handler(&C.instrs[C.irpos]);
+    printf("----------------------------------------\n");
+}
+#else
+#endif
+
 
 /*
  * code generation 
  */
 enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
-#define ob(b) do { if (!C.scanningForLocals) *C.codep++ = (b); } while(0)
+#define ob(b) (*C.codep++ = (b))
 #define outnum(n) { uintptr_t _ = (uintptr_t)n; uintptr_t mask = 0xff; uintptr_t sh = 0; int i; \
     for (i = 0; i < REG_SIZE; ++i) { ob((_&mask)>>sh); mask <<= 8; sh += 8; } }
 #define get32(p) (*(int*)p)
@@ -366,7 +396,6 @@ static char* g_test(int NZ, char* prev)
 
 static void g_fixup1(char* p, char* to)
 {
-    if (C.scanningForLocals) return;
     while (p)
     {
         char* tmp = (char*)(uintptr_t)get32(p); /* next value in the list before we overwrite it */
@@ -398,16 +427,23 @@ static void g_store()
 
 
 /*
- * parsing
+ * parsing and intermediate gen
  */
 #define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
-#define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK.data.str); NEXT(); } while(0)
+#define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK->data.str); NEXT(); } while(0)
+
+static int alloclabel()
+{
+    zvpush(C.labels, -1);
+    return zvsize(C.labels) - 1;
+}
+#define setlabel(l) (C.labels[(l)] = zvsize(C.instrs))
 
 static void atom()
 {
     if (CURTOKt == T_NUM)
     {
-        VAL(V_CONST, CURTOK.data.tokn);
+        INSTR1(i_const, CURTOK->data.tokn);
         NEXT();
     }
     else if (CURTOKt == T_IDENT)
@@ -420,21 +456,15 @@ static void atom()
 
 static void comparison()
 {
-    struct { char op; char cc; } cmptoks[] = { /* rhs is very platform-specific, the setcc op for each */
-        { '<',    0xc },
-        { '>',    0xf },
-        { KW(<=), 0xe },
-        { KW(>=), 0xd },
-        { KW(==), 4 },
-        { KW(!=), 5 },
-    };
-    int cmptoki;
+    char cmps[] = { '<', '>', KW(<=), KW(>=), KW(==), KW(!=) };
     atom();
-    while ((cmptoki = zvfindnp(cmptoks, CURTOKt, 6, 1)) != -1)
+    for (;;)
     {
+        Token* cmp = CURTOK;
+        if (!zvcontainsn(cmps, CURTOKt, 6)) break;
         NEXT();
         atom();
-        g_cmp(cmptoks[cmptoki].cc);
+        INSTR1(i_cmp, cmp->type);
     }
 }
 
@@ -484,13 +514,13 @@ static void expr_stmt()
 
 static void stmt()
 {
-    char *offdone = 0, *offtest = 0;
+    int labeldone, labeltest;
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
-        if (CURTOKt == T_DEDENT) VAL(V_CONST, 20710);
+        if (CURTOKt == T_DEDENT) INSTR1(i_const, 20710);
         else or_test();
-        g_leave_ret();
+        INSTR0(i_ret);
     }
     else if (CURTOKt == KW(print))
     {
@@ -506,27 +536,33 @@ static void stmt()
     {
         SKIP(KW(if));
         comparison();
-        offtest = g_test(0, 0);
+
+        labeldone = alloclabel();
+
+        labeltest = alloclabel();
+        INSTR2(i_jmpc, 0, labeltest);
         suite();
-        offdone = g_jmp(offdone);
-        g_fixup(offtest);
+        INSTR2(i_jmpc, -1, labeldone);
+        setlabel(labeltest);
+
         while (CURTOKt == KW(elif) || CURTOKt == KW(else))
         {
             NEXT();
             if (PREVTOK.type == KW(elif))
             {
                 comparison();
-                offtest = g_test(0, 0);
+                labeltest = alloclabel();
+                INSTR2(i_jmpc, 0, labeltest);
             }
-            else offtest = 0;
+            else labeltest = -1;
             suite();
-            if (offtest)
+            if (labeltest >= 0)
             {
-                offdone = g_jmp(offdone);
-                g_fixup(offtest);
+                INSTR2(i_jmpc, -1, labeldone);
+                setlabel(labeltest);
             }
         }
-        g_fixup(offdone);
+        setlabel(labeldone);
     }
     else if (CURTOKt == T_NL) error("bad indent");
     else expr_stmt();
@@ -545,24 +581,13 @@ static void suite()
 
 static void funcdef()
 {
-    int fstart;
     SKIP(KW(def));
     SKIP(T_IDENT);
-    if (strcmp(PREVTOK.data.str, "__main__") == 0) C.entry = C.codep;
     SKIP('(');
     SKIP(')');
-
-    fstart = C.curtok;
-    C.scanningForLocals = 1;
-    C.locals = zvfree(C.locals);
+    INSTR1(i_func, CURTOK - 3);
     suite();
-
-    C.curtok = fstart;
-    C.scanningForLocals = 0;
-
-    g_prolog();
-    suite();
-    g_leave_ret();
+    INSTR0(i_ret);
 }
 
 static void fileinput()
@@ -581,8 +606,8 @@ static void fileinput()
     static void zept_freeExec(void* p, int size) { munmap(p, size); }
 #elif _WIN32
     #include <windows.h>
-    static void* zept_allocExec(int size) { error("todo;"); }
-    static void zept_freeExec(void* p, int size) { error("todo;"); }
+    static void* zept_allocExec(int size) { return VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); }
+    static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
 #endif
 
 
@@ -591,10 +616,10 @@ static void fileinput()
  */
 int zeptRun(char* code)
 {
-    int ret;
+    int ret, allocSize;
     memset(&C, 0, sizeof(C));
     C.input = code;
-    int allocSize = 1<<17;
+    allocSize = 1<<17;
     if (setjmp(C.errBuf) == 0)
     {
         tokenize();
@@ -610,7 +635,8 @@ int zeptRun(char* code)
 #endif
         C.codeseg = C.codep = zept_allocExec(allocSize);
         fileinput();
-#if 1 /* dump disassembly of generated code, needs ndisasm in path */
+        codegen();
+#if 0 /* dump disassembly of generated code, needs ndisasm in path */
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
@@ -621,11 +647,15 @@ int zeptRun(char* code)
     }
     else
     {
+#if 1
+        printf("Error: %s\n", C.errorText);
+#endif
         ret = -1;
     }
     zvfree(C.tokens);
     zvfree(C.vst);
-    zvfree(C.locals);
+    zvfree(C.labels);
+    zvfree(C.instrs);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }

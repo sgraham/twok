@@ -19,11 +19,11 @@ void copyline(char** dest, char** src)
     }
 }
 
-#define VERBOSE
+//#define VERBOSE
 
 int main(int argc, char** argv)
 {
-    int i = 0, ret, failCount = 0, passCount = 0;
+    int i = 0, ret, failCount = 0, passCount = 0, failed;
     int expectedRC;
     FILE* f = fopen("tests.zept", "rb");
     char* src = testdata;
@@ -54,7 +54,7 @@ int main(int argc, char** argv)
         if (argc == 2 && atoi(argv[1]) != i) continue;
         printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
         ret = zeptRun(curtest);
-        int failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
+        failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
         passCount += !failed;
