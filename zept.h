@@ -350,15 +350,17 @@ static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 4 };
 /* store the given register (offset) into the given stack slot */
 static void g_store(int reg, int slot)
 {
+    error("todo; spill");
 }
 
-static int getReg2(int start, int regcat)
+static int getReg(int valid)
 {
     int i, j, reg;
 
     /* figure out if it's currently in use */
-    for (i = start; i <= regcat; i <<= 1)
+    for (i = V_REG_EAX; i <= V_REG_EBX; i <<= 1)
     {
+        if ((i & valid) == 0) continue;
         for (j = 0; j < zvsize(C.vst); ++j)
             if ((C.vst[j].tag.type & i))
                 break;
@@ -370,14 +372,14 @@ static int getReg2(int start, int regcat)
     /* otherwise, find the oldest in the class */
     for (j = 0; j < zvsize(C.vst); ++j)
     {
-        if ((C.vst[j].tag.type & regcat))
+        if ((C.vst[j].tag.type & valid))
         {
             /* and a location to spill it to */
             for (i = 0; i < sizeof(NC.spills)/sizeof(NC.spills[0]); ++i)
                 if (!NC.spills[i]) break;
 
             /* and send it there and update the flags */
-            reg = C.vst[j].tag.type & regcat;
+            reg = C.vst[j].tag.type & valid;
             g_store(reg, i);
             NC.spills[i] = 1;
             C.vst[j].tag.type &= ~V_REG_ANY;
@@ -392,20 +394,33 @@ static int getReg2(int start, int regcat)
     return -1;
 }
 
-static int g_rval(int regstart, int regend)
+static int g_rval(int valid)
 {
     int reg;
     if (zvlast(C.vst).tag.type & V_IMMED)
     {
-        /* mov reg, const */
-        reg = getReg2(regstart, regend);
-        ob(0xb8 + vreg_to_enc(reg));
-        outnum(zvlast(C.vst).data.i);
-        zvpop(C.vst);
+        if (zvlast(C.vst).tag.type & V_ADDR)
+        {
+            /* mov reg, const */
+            reg = getReg(valid);
+            ob(0xb8 + vreg_to_enc(reg));
+            outnum(zvlast(C.vst).data.i);
+            /* mov [reg], reg */
+            ob(0x67); ob(0x89);
+            ob(vreg_to_enc(reg) + vreg_to_enc(reg) * 8);
+            zvpop(C.vst);
+        }
+        else
+        {
+            /* mov reg, const */
+            reg = getReg(valid);
+            ob(0xb8 + vreg_to_enc(reg));
+            outnum(zvlast(C.vst).data.i);
+            zvpop(C.vst);
+        }
     }
     else if (zvlast(C.vst).tag.type == V_ADDR)
     {
-        error("todo;");
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY))
     {
@@ -419,6 +434,28 @@ static int g_rval(int regstart, int regend)
     return reg;
 }
 
+static int g_lval(int valid)
+{
+    int reg = 0;
+    if (zvlast(C.vst).tag.type & V_ADDR)
+    {
+        if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY))) { /* nothing, just pop and return reg */ }
+        else if (zvlast(C.vst).tag.type & V_IMMED)
+        {
+            /* mov reg, const */
+            reg = getReg(valid);
+            ob(0xb8 + vreg_to_enc(reg));
+            outnum(zvlast(C.vst).data.i);
+        }
+    }
+    else
+    {
+        error("expecting lval");
+    }
+    zvpop(C.vst);
+    return reg;
+}
+
 static void i_const(int v) { VAL(V_IMMED, v); }
 static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
@@ -428,11 +465,11 @@ static void i_func(Token* tok) {
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 
-static void i_ret() { g_rval(V_REG_EAX, V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
+static void i_ret() { g_rval(V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
 
 static void i_cmp(int op)
 {
-    int into;
+    int a, into;
     struct { char kw, cc; } cmpccs[] = {
         { '<', 0xc },
         { '>', 0xf },
@@ -441,9 +478,9 @@ static void i_cmp(int op)
         { KW(==), 4 },
         { KW(!=), 5 },
     };
-    g_rval(V_REG_EAX, V_REG_EAX);
-    into = g_rval(V_REG_ECX, V_REG_ANY); /* not EAX here */
-    ob(0x39); ob(0xc0 + vreg_to_enc(into)); /* cmp eXx, eax */
+    a = g_rval(V_REG_EAX);
+    into = g_rval(V_REG_ANY & ~a);
+    ob(0x39 + vreg_to_enc(a)); ob(0xc0 + vreg_to_enc(into)); /* cmp eXx, eax */
 
     ob(0xb8 + vreg_to_enc(into));
     outnum(0);
@@ -466,7 +503,7 @@ static char* i_jmpc(int cond, char* prev)
     }
     else
     {
-        int reg = g_rval(V_REG_EAX, V_REG_ANY);
+        int reg = g_rval(V_REG_ANY);
         ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test eXx, eXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum(prev ? prev - C.codeseg : 0);
@@ -485,6 +522,15 @@ static void i_label(char* p)
         put32(p, (int)(to - p - 4));
         p = tmp;
     }
+}
+
+/* lhs, rhs on stack */
+static void i_store()
+{
+    int val = g_rval(V_REG_ANY);
+    int into = g_lval(V_REG_ANY & ~val);
+    ob(0x67); ob(0x89);
+    ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
 /*static void i_math(Value* v) {} */
@@ -510,8 +556,7 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        error("todo;");
-        i_const(0);
+        VAL(V_ADDR | V_IMMED, 0x1234);
         NEXT();
     }
     else error("unexpected atom");
@@ -570,9 +615,9 @@ static void expr_stmt()
     {
         NEXT();
         or_test();
-        /*if (CURTOKt == '=') g_dup();*/
-        /*g_store();*/
+        i_store();
     }
+    else zvpop(C.vst); /* discard */
 }
 
 static void stmt()
