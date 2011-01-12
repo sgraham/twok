@@ -28,7 +28,7 @@ int main(int argc, char** argv)
     FILE* f = fopen("tests.zept", "rb");
     char* src = testdata;
     char* dest, *desc;
-    ret = /* warning suppress */ fread(src, 1, 1<<24, f);
+    ret = /* warning suppress */ (int)fread(src, 1, 1<<24, f);
     for (;; ++i)
     {
         if (src[0] != '#' || src[1] != '#' || src[2] != '#')

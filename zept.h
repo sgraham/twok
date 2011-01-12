@@ -82,15 +82,13 @@ typedef struct Value {
     } data;
     int label;
 } Value;
-enum { V_CONST = 1, V_LVAL = 2, V_CMP = 4 };
-#define VAL(t, d) do { Value _ = { { (t) }, { (d) } }; if (zvsize(C.vst) && zvlast(C.vst).tag.type == V_CMP) g_rval(R_ANY); zvpush(C.vst, _); } while(0)
+#define VAL(t, d) do { Value _ = { { (t) }, { (d) } }; zvpush(C.vst, _); } while(0)
 #define J_UNCOND 2
 
 typedef struct Context {
     Token* tokens;
     int curtok, irpos;
     char *input, *codeseg, *codep, *entry;
-    int *labels;
     Value *instrs, *vst;
     jmp_buf errBuf;
     char errorText[512];
@@ -196,7 +194,7 @@ static void error(char *fmt, ...)
  */
 
 static char KWS[] = " if elif else or for def return mod and not print pass << >> <= >= == != ";
-#define KW(k) ((strstr(KWS, #k " ") - KWS) + T_KW)
+#define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
 enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
 static Token* tokSetStr(Token* t, char* str)
 {
@@ -205,9 +203,9 @@ static Token* tokSetStr(Token* t, char* str)
     t->data.str[sizeof(t->data.str) - 1] = 0;
     return t;
 }
-#define TOK(t) do { Token _ = { t, startpos - C.input }; zvpush(C.tokens, *tokSetStr(&_, #t)); } while(0)
-#define TOKI(t, s) do { Token _ = { t, startpos - C.input }; zvpush(C.tokens, *tokSetStr(&_, s)); } while(0)
-#define TOKN(t, v) do { Token _ = { t, startpos - C.input }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
+#define TOK(t) do { Token _ = { t, (int)(startpos - C.input) }; zvpush(C.tokens, *tokSetStr(&_, #t)); } while(0)
+#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input) }; zvpush(C.tokens, *tokSetStr(&_, s)); } while(0)
+#define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input) }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
 static void tokenize()
@@ -271,7 +269,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
                 else
                 {
                     tok = T_IDENT;
-                    if (strstr(KWS, ident)) tok = strstr(KWS, ident) - KWS + T_KW;
+                    if (strstr(KWS, ident)) tok = (int)(strstr(KWS, ident) - KWS + T_KW);
                     TOKI(tok, ident);
                 }
             }
@@ -327,46 +325,86 @@ static void i_label(char* lab)
 
 /* x64 backend. word size is 32 bit. */
 
+#define V_IMMED     0x01
+#define V_REG_EAX   0x02
+#define V_REG_ECX   0x04
+#define V_REG_EDX   0x08
+#define V_REG_EBX   0x10
+#define V_REG_ANY (V_REG_EAX | V_REG_ECX | V_REG_EDX | V_REG_EBX)
+#define V_TEMP      0x20
+#define V_ADDR      0x40
+
 enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
 #define ob(b) (*C.codep++ = (b))
 #define outnum(n) { uintptr_t _ = (uintptr_t)(n); uintptr_t mask = 0xff; uintptr_t sh = 0; int i; \
-    for (i = 0; i < REG_SIZE; ++i) { ob((_&mask)>>sh); mask <<= 8; sh += 8; } }
-
-enum { R_EAX = 0, R_ECX = 1, R_EDX = 2, R_EBX = 3, R_ANY, R_NUMREGS = R_ANY };
+    for (i = 0; i < REG_SIZE; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
-    int regInUse[R_NUMREGS];
+    int spills[64]; /* is the Nth spill location in use? */
 } NativeContext;
 static NativeContext NC;
 
-static int getReg(int r)
+static int RegCatToRegOffset[5] = { 0, 1, 2, -1, 4 };
+#define vreg_to_offset(vr) RegCatToRegOffset[((vr) >> 2)]
+
+/* store the given register (offset) into the given stack slot */
+static void g_store(int reg, int slot)
 {
-    return r;
 }
 
-/* can request a specific register or R_ANY. returned will be a specific one. */
+/* can request either V_REG_EAX or V_REG_ANY, returns 0-3 not flag */
+static int getReg(int regcat)
+{
+    int i, j, reg;
+
+    /* figure out if it's currently in use */
+    for (i = V_REG_EAX; i <= regcat; i <<= 1)
+    {
+        for (j = 0; j < zvsize(C.vst); ++j)
+            if ((C.vst[j].tag.type & i))
+                break;
+        /* not in use, return this one */
+        if (j == zvsize(C.vst))
+            return vreg_to_offset(i);
+    }
+
+    /* otherwise, find the oldest in the class */
+    for (j = 0; j < zvsize(C.vst); ++j)
+    {
+        if ((C.vst[j].tag.type & regcat))
+        {
+            /* and a location to spill it to */
+            for (i = 0; i < zvsize(C.vst); ++i)
+                if (!NC.spills[i]) break;
+            assert(i < zvsize(NC.spills));
+
+            /* and send it there and update the flags */
+            reg = vreg_to_offset(C.vst[j].tag.type & regcat);
+            g_store(reg, i);
+            NC.spills[i] = 1;
+            C.vst[j].tag.type &= ~V_REG_ANY;
+            C.vst[j].tag.type |= V_TEMP;
+            C.vst[j].data.i = i;
+
+            /* and return that register */
+            return reg;
+        }
+    }
+    error("internal error, or out of stack slots");
+    return -1;
+}
+
 static int g_rval(int regcat)
 {
     int reg = getReg(regcat);
-    if (zvlast(C.vst).tag.type & V_CONST)
+    if (zvlast(C.vst).tag.type & V_IMMED)
     {
         /* mov reg, const */
         ob(0xb8 + reg);
         outnum(zvlast(C.vst).data.i);
         zvpop(C.vst);
     }
-    else if (zvlast(C.vst).tag.type & V_CMP)
-    {
-        /* clear reg, can't xor as that sets flags */
-        ob(0xb8 + reg);
-        outnum(0);
-        /* setxx */
-        ob(0x0f);
-        ob(0x90 + zvlast(C.vst).data.i);
-        ob(0xc0 + reg);
-        zvpop(C.vst);
-    }
-    else if (zvlast(C.vst).tag.type == V_LVAL)
+    else if (zvlast(C.vst).tag.type == V_ADDR)
     {
         error("todo;");
     }
@@ -377,19 +415,20 @@ static int g_rval(int regcat)
     return reg;
 }
 
-static void i_const(int v) { VAL(V_CONST, v); }
+static void i_const(int v) { VAL(V_IMMED, v); }
 static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
     ob(0x48); ob(0x81); ob(0xec); outnum(256); /* sub rsp, 100 */ /* todo; XXX hardcoded 64 locals */
-    VAL(V_CONST, 0); /* for fall off ret */
+    VAL(V_IMMED, 0); /* for fall off ret */
 }
 
-static void i_ret() { g_rval(R_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
+static void i_ret() { g_rval(V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
 
 static void i_cmp(int op)
 {
+    int into;
     struct { char kw, cc; } cmpccs[] = {
         { '<', 0xc },
         { '>', 0xf },
@@ -398,10 +437,12 @@ static void i_cmp(int op)
         { KW(==), 4 },
         { KW(!=), 5 },
     };
-    g_rval(R_EAX);
-    g_rval(R_ECX);
-    ob(0x39); ob(0xc1); /* cmp ecx, eax */
-    VAL(V_CMP, cmpccs[zvfindnp(cmpccs, op, 6, 1)].cc);;
+    g_rval(V_REG_EAX);
+    into = g_rval(V_REG_ANY);
+    ob(0x39); ob(0xc0 + into); /* cmp ecx, eax */
+    ob(0x9c); /* pushf */
+    ob(0x58 + into); /* pop eXx */
+    //VAL(V
 }
 
 /* emit a jump, returns the location that needs to be fixed up. make a linked
@@ -417,7 +458,7 @@ static char* i_jmpc(int cond, char* prev)
     }
     else
     {
-        int reg = g_rval(R_EAX);
+        int reg = g_rval(V_REG_EAX);
         ob(0x85); ob(0xc0 + reg * 9); /* test eXx, eXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum(prev ? prev - C.codeseg : 0);
@@ -433,7 +474,7 @@ static void i_label(char* p)
     while (p)
     {
         char* tmp = get32(p) ? get32(p) + C.codeseg : 0; /* next value in the list before we overwrite it */
-        put32(p, to - p - 4);
+        put32(p, (int)(to - p - 4));
         p = tmp;
     }
 }
@@ -662,7 +703,6 @@ int zeptRun(char* code)
         ret = -1;
     zvfree(C.tokens);
     zvfree(C.vst);
-    zvfree(C.labels);
     zvfree(C.instrs);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
