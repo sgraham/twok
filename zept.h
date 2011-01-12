@@ -344,28 +344,27 @@ typedef struct NativeContext {
 } NativeContext;
 static NativeContext NC;
 
-static int RegCatToRegOffset[5] = { 0, 1, 2, -1, 4 };
-#define vreg_to_offset(vr) RegCatToRegOffset[((vr) >> 2)]
+static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 4 };
+#define vreg_to_enc(vr) RegCatToRegOffset[((vr) >> 2)]
 
 /* store the given register (offset) into the given stack slot */
 static void g_store(int reg, int slot)
 {
 }
 
-/* can request either V_REG_EAX or V_REG_ANY, returns 0-3 not flag */
-static int getReg(int regcat)
+static int getReg2(int start, int regcat)
 {
     int i, j, reg;
 
     /* figure out if it's currently in use */
-    for (i = V_REG_EAX; i <= regcat; i <<= 1)
+    for (i = start; i <= regcat; i <<= 1)
     {
         for (j = 0; j < zvsize(C.vst); ++j)
             if ((C.vst[j].tag.type & i))
                 break;
         /* not in use, return this one */
         if (j == zvsize(C.vst))
-            return vreg_to_offset(i);
+            return i;
     }
 
     /* otherwise, find the oldest in the class */
@@ -374,12 +373,11 @@ static int getReg(int regcat)
         if ((C.vst[j].tag.type & regcat))
         {
             /* and a location to spill it to */
-            for (i = 0; i < zvsize(C.vst); ++i)
+            for (i = 0; i < sizeof(NC.spills)/sizeof(NC.spills[0]); ++i)
                 if (!NC.spills[i]) break;
-            assert(i < zvsize(NC.spills));
 
             /* and send it there and update the flags */
-            reg = vreg_to_offset(C.vst[j].tag.type & regcat);
+            reg = C.vst[j].tag.type & regcat;
             g_store(reg, i);
             NC.spills[i] = 1;
             C.vst[j].tag.type &= ~V_REG_ANY;
@@ -394,13 +392,14 @@ static int getReg(int regcat)
     return -1;
 }
 
-static int g_rval(int regcat)
+static int g_rval(int regstart, int regend)
 {
-    int reg = getReg(regcat);
+    int reg;
     if (zvlast(C.vst).tag.type & V_IMMED)
     {
         /* mov reg, const */
-        ob(0xb8 + reg);
+        reg = getReg2(regstart, regend);
+        ob(0xb8 + vreg_to_enc(reg));
         outnum(zvlast(C.vst).data.i);
         zvpop(C.vst);
     }
@@ -408,8 +407,13 @@ static int g_rval(int regcat)
     {
         error("todo;");
     }
+    else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY))
+    {
+        return reg;
+    }
     else
     {
+        /* todo; reg-reg move */
         error("internal error, unexpected stack state");
     }
     return reg;
@@ -424,7 +428,7 @@ static void i_func(Token* tok) {
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 
-static void i_ret() { g_rval(V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
+static void i_ret() { g_rval(V_REG_EAX, V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
 
 static void i_cmp(int op)
 {
@@ -437,12 +441,16 @@ static void i_cmp(int op)
         { KW(==), 4 },
         { KW(!=), 5 },
     };
-    g_rval(V_REG_EAX);
-    into = g_rval(V_REG_ANY);
-    ob(0x39); ob(0xc0 + into); /* cmp ecx, eax */
-    ob(0x9c); /* pushf */
-    ob(0x58 + into); /* pop eXx */
-    //VAL(V
+    g_rval(V_REG_EAX, V_REG_EAX);
+    into = g_rval(V_REG_ECX, V_REG_ANY); /* not EAX here */
+    ob(0x39); ob(0xc0 + vreg_to_enc(into)); /* cmp eXx, eax */
+
+    ob(0xb8 + vreg_to_enc(into));
+    outnum(0);
+    ob(0x0f);
+    ob(0x90 + cmpccs[zvfindnp(cmpccs, op, 6, 1)].cc);
+    ob(0xc0 + vreg_to_enc(into));
+    VAL(into, 0);
 }
 
 /* emit a jump, returns the location that needs to be fixed up. make a linked
@@ -458,8 +466,8 @@ static char* i_jmpc(int cond, char* prev)
     }
     else
     {
-        int reg = g_rval(V_REG_EAX);
-        ob(0x85); ob(0xc0 + reg * 9); /* test eXx, eXx */
+        int reg = g_rval(V_REG_EAX, V_REG_ANY);
+        ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test eXx, eXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum(prev ? prev - C.codeseg : 0);
     }
