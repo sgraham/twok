@@ -51,7 +51,9 @@ int main(int argc, char** argv)
         while (!(src[0] == '#' && src[1] == '#' && src[2] == '#'))
             copyline(&dest, &src);
         *dest = 0;
-        if (argc == 2 && atoi(argv[1]) != i) continue;
+        if ((argc == 2 && atoi(argv[1]) != i)
+                || (argc == 3 && (atoi(argv[1]) > i || atoi(argv[2]) < i)))
+                continue;
         printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
         ret = zeptRun(curtest);
         failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);

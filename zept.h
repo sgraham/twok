@@ -55,12 +55,6 @@ extern int zeptRun(char* code);
 #include <string.h>
 #include <ctype.h>
 
-#ifdef __unix__
-    #include <stdint.h>
-#else
-    #include <stddef.h>
-#endif
-
 typedef struct Token {
     int type, pos;
     union {
@@ -71,12 +65,10 @@ typedef struct Token {
 
 typedef struct Value {
     union {
-        uintptr_t __unused;
         int type;
         void (*handler)(struct Value*);
     } tag;
     union {
-        uintptr_t __unused;
         int i;
         char* p;
     } data;
@@ -300,25 +292,27 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
  * backends, define one of them.
  */
 
-#if 0
+#if 1
 
 /* diagnostic 'backend', just prints out IR but doesn't run it */
 
 static int IRpos;
 static void i_const(int v) { printf("%5d: const %d\n", IRpos++, v); }
+static void i_addr(int v) { printf("%5d: addr %d\n", IRpos++, v); }
 static void i_func(Token* tok) { printf("%5d: func %s\n", IRpos++, tok->data.str); }
 static void i_ret() { printf("%5d: ret\n", IRpos++); }
 static void i_cmp(int op) { printf("%5d: cmp %c%c\n", IRpos++, op < T_KW ? op : KWS[op-T_KW], op < T_KW ? ' ' : KWS[op-T_KW+1]); }
 static char* i_jmpc(int cond, char* prev)
 {
     printf("%5d: jmpc %s ->%p\n", IRpos++, cond == 0 ? "false" : (cond == 1 ? "true" : "uncond"), prev);
-    return (char*)(uintptr_t)(IRpos - 1);
+    return (char*)(unsigned long)(IRpos - 1);
 }
 static void i_label(char* lab)
 {
-    uintptr_t li = (uintptr_t)lab;
+    unsigned long li = (unsigned long)lab;
     printf("       fixup to here at %ld\n", li);
 }
+static void i_store() { printf("%5d: store\n", C.irpos++); }
 /*static void i_math(Value* v) { printf("%5d: math\n", C.irpos); }*/
 
 #elif defined(_M_X64) || defined(__amd64__)
@@ -336,7 +330,7 @@ static void i_label(char* lab)
 
 enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
 #define ob(b) (*C.codep++ = (b))
-#define outnum(n) { uintptr_t _ = (uintptr_t)(n); uintptr_t mask = 0xff; uintptr_t sh = 0; int i; \
+#define outnum(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
     for (i = 0; i < REG_SIZE; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
@@ -457,6 +451,7 @@ static int g_lval(int valid)
 }
 
 static void i_const(int v) { VAL(V_IMMED, v); }
+static void i_addr(int v) { VAL(V_IMMED | V_ADDR, v); }
 static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
@@ -543,10 +538,6 @@ static void i_store()
 #define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK->data.str); NEXT(); } while(0)
 
-#define INSTR2(i, d, d2) ((void)zvadd(C.instrs, 1), (void)((&zvlast(C.instrs))->tag.__unused = (uintptr_t)i), (void)((&zvlast(C.instrs))->data.__unused = (uintptr_t)d), (void)((&zvlast(C.instrs))->label = d2), zvsize(C.instrs) - 1)
-#define INSTR1(i, d) (void)INSTR2(i, d, 0xbad1abe1)
-#define INSTR0(i) (void)INSTR2(i, 0, 0)
-
 static void atom()
 {
     if (CURTOKt == T_NUM)
@@ -556,7 +547,7 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        VAL(V_ADDR | V_IMMED, 0x1234);
+        i_addr(0x1234);
         NEXT();
     }
     else error("unexpected atom");
