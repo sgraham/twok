@@ -78,7 +78,7 @@ typedef struct Value {
 #define J_UNCOND 2
 
 typedef struct Context {
-    Token* tokens;
+    Token *tokens, **locals;
     int curtok, irpos;
     char *input, *codeseg, *codep, *entry;
     Value *instrs, *vst;
@@ -101,11 +101,12 @@ static void suite();
 #define zvsize(a)                   ((a) ? zv__zvn(a) : 0)
 #define zvadd(a,n)                  (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])
 #define zvlast(a)                   ((a)[zv__zvn(a)-1])
-#define zvfindnp(a,i,n,psize)       (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
-#define zvcontainsnp(a,i,n,psize)   (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1)
+#define zvindexofnp(a,i,n,psize)    (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
+#define zvindexof(a,i)              (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),zv__zvn(a),sizeof(*(a))))
+#define zvcontainsnp(a,i,n,psize)   ((a) ? (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
 #define zvcontainsp(a,i,psize)      (zvcontainsnp((a),i,zv__zvn(a),psize))
-#define zvcontainsn(a,i,n)          (zvcontainsnp((a),i,n,sizeof(*(a))))
-#define zvcontains(a,i)             (zvcontainsp((a),i,sizeof(*(a))))
+#define zvcontainsn(a,i,n)          ((a) ? (zvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
+#define zvcontains(a,i)             ((a) ? (zvcontainsp((a),i,sizeof(*(a)))) : 0)
 
 #define zv__zvraw(a) ((int *) (a) - 2)
 #define zv__zvm(a)   zv__zvraw(a)[0]
@@ -292,7 +293,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
  * backends, define one of them.
  */
 
-#if 1
+#if 0
 
 /* diagnostic 'backend', just prints out IR but doesn't run it */
 
@@ -327,6 +328,7 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 #define V_REG_ANY (V_REG_EAX | V_REG_ECX | V_REG_EDX | V_REG_EBX)
 #define V_TEMP      0x20
 #define V_ADDR      0x40
+#define V_LOCAL     0x80
 
 enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
 #define ob(b) (*C.codep++ = (b))
@@ -335,11 +337,15 @@ enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running i
 
 typedef struct NativeContext {
     int spills[64]; /* is the Nth spill location in use? */
+    char* numlocsp;
 } NativeContext;
 static NativeContext NC;
 
 static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 4 };
 #define vreg_to_enc(vr) RegCatToRegOffset[((vr) >> 2)]
+
+#define put32(p, n) (*(int*)(p) = (n))
+#define get32(p) (*(int*)p)
 
 /* store the given register (offset) into the given stack slot */
 static void g_store(int reg, int slot)
@@ -413,8 +419,9 @@ static int g_rval(int valid)
             zvpop(C.vst);
         }
     }
-    else if (zvlast(C.vst).tag.type == V_ADDR)
+    else if (zvlast(C.vst).tag.type & V_LOCAL)
     {
+        error("todo; here");
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY))
     {
@@ -430,16 +437,22 @@ static int g_rval(int valid)
 
 static int g_lval(int valid)
 {
-    int reg = 0;
-    if (zvlast(C.vst).tag.type & V_ADDR)
+    int reg = 0, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
+    if (tag & V_ADDR)
     {
-        if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY))) { /* nothing, just pop and return reg */ }
-        else if (zvlast(C.vst).tag.type & V_IMMED)
+        if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
+        else if (tag & V_IMMED)
         {
             /* mov reg, const */
             reg = getReg(valid);
             ob(0xb8 + vreg_to_enc(reg));
-            outnum(zvlast(C.vst).data.i);
+            outnum(val);
+        }
+        else if (tag & V_LOCAL)
+        {
+            reg = getReg(valid);
+            ob(0x67); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov eXx, [ebp - xxx] (long form) */
+            outnum(val);
         }
     }
     else
@@ -451,16 +464,22 @@ static int g_lval(int valid)
 }
 
 static void i_const(int v) { VAL(V_IMMED, v); }
-static void i_addr(int v) { VAL(V_IMMED | V_ADDR, v); }
+static void i_addr(int v) { VAL(V_LOCAL | V_ADDR, v); }
 static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
-    ob(0x48); ob(0x81); ob(0xec); outnum(256); /* sub rsp, 100 */ /* todo; XXX hardcoded 64 locals */
+    ob(0x48); ob(0x81); ob(0xec); outnum(0); /* sub rsp, xxx */
+    NC.numlocsp = C.codep - 4; /* save for endfunc to patch */
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 
 static void i_ret() { g_rval(V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
+static void i_endfunc()
+{
+    i_ret();
+    put32(NC.numlocsp, zvsize(C.locals) + 256); /* todo; XXX hardcoded # spills */
+}
 
 static void i_cmp(int op)
 {
@@ -480,7 +499,7 @@ static void i_cmp(int op)
     ob(0xb8 + vreg_to_enc(into));
     outnum(0);
     ob(0x0f);
-    ob(0x90 + cmpccs[zvfindnp(cmpccs, op, 6, 1)].cc);
+    ob(0x90 + cmpccs[zvindexofnp(cmpccs, op, 6, 1)].cc);
     ob(0xc0 + vreg_to_enc(into));
     VAL(into, 0);
 }
@@ -506,8 +525,6 @@ static char* i_jmpc(int cond, char* prev)
     return C.codep - 4;
 }
 
-#define put32(p, n) (*(int*)(p) = (n))
-#define get32(p) (*(int*)p)
 static void i_label(char* p)
 {
     char* to = C.codep;
@@ -547,7 +564,9 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        i_addr(0x1234);
+        Token* tmp = CURTOK;
+        if (!zvcontains(C.locals, tmp)) zvpush(C.locals, tmp);
+        i_addr(zvindexof(C.locals, tmp));
         NEXT();
     }
     else error("unexpected atom");
@@ -682,7 +701,7 @@ static void funcdef()
     SKIP('(');
     SKIP(')');
     suite();
-    i_ret();
+    i_endfunc();
 }
 
 static void fileinput()
@@ -748,6 +767,7 @@ int zeptRun(char* code)
     zvfree(C.tokens);
     zvfree(C.vst);
     zvfree(C.instrs);
+    zvfree(C.locals);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }
