@@ -54,6 +54,16 @@ extern int zeptRun(char* code);
 #include <setjmp.h>
 #include <string.h>
 #include <ctype.h>
+#if __unix__ || (__APPLE__ && __MACH__)
+    #include <sys/mman.h>
+    static void* zept_allocExec(int size) { return mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
+    static void zept_freeExec(void* p, int size) { munmap(p, size); }
+#elif _WIN32
+    #include <windows.h>
+    static void* zept_allocExec(int size) { return VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); }
+    static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
+    #define strdup _strdup
+#endif
 
 typedef struct Token {
     int type, pos;
@@ -194,12 +204,12 @@ char* strintern(char* s)
     for (i = 0; i < zvsize(C.strs); ++i)
         if (strcmp(s, C.strs[i]) == 0)
             return C.strs[i];
-    zvpush(C.strs, _strdup(s));
+    zvpush(C.strs, strdup(s));
     return zvlast(C.strs);
 }
 enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
-#define TOK(t) do { Token _ = { t, (int)(startpos - C.input), strintern(#t) }; zvpush(C.tokens, _); } while(0)
-#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), strintern(s) }; zvpush(C.tokens, _); } while(0)
+#define TOK(t) do { Token _ = { t, (int)(startpos - C.input), { strintern(#t) } }; zvpush(C.tokens, _); } while(0)
+#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), { strintern(s) } }; zvpush(C.tokens, _); } while(0)
 #define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input) }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
@@ -320,23 +330,25 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 
 #elif defined(_M_X64) || defined(__amd64__)
 
-/* x64 backend. word size is 32 bit. */
+/* x64 backend */
 
 #define V_IMMED     0x01
-#define V_REG_EAX   0x02
-#define V_REG_ECX   0x04
-#define V_REG_EDX   0x08
-#define V_REG_EBX   0x10
-#define V_REG_ANY (V_REG_EAX | V_REG_ECX | V_REG_EDX | V_REG_EBX)
+#define V_REG_RAX   0x02
+#define V_REG_RCX   0x04
+#define V_REG_RDX   0x08
+#define V_REG_RBX   0x10
+#define V_REG_ANY (V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX)
 #define V_TEMP      0x20
 #define V_ADDR      0x40
 #define V_LOCAL     0x80
 #define V_FIRST     0x100 /* todo; i think this is crap. */
 
-enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
+enum { REG_SIZE = 8 };
 #define ob(b) (*C.codep++ = (b))
-#define outnum(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
-    for (i = 0; i < REG_SIZE; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
+#define outnum32(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
+    for (i = 0; i < 4; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
+#define outnum64(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
+    for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
     int spills[64]; /* is the Nth spill location in use? */
@@ -361,7 +373,7 @@ static int getReg(int valid)
     int i, j, reg;
 
     /* figure out if it's currently in use */
-    for (i = V_REG_EAX; i <= V_REG_EBX; i <<= 1)
+    for (i = V_REG_RAX; i <= V_REG_RBX; i <<= 1)
     {
         if ((i & valid) == 0) continue;
         for (j = 0; j < zvsize(C.vst); ++j)
@@ -404,28 +416,28 @@ static int g_rval(int valid)
     {
         if (tag & V_ADDR)
         {
-            /* mov reg, const */
+            /* mov Reg, const */
             reg = getReg(valid);
-            ob(0xb8 + vreg_to_enc(reg));
-            outnum(val);
-            /* mov [reg], reg */
-            ob(0x67); ob(0x89);
+            ob(0x48); ob(0xb8 + vreg_to_enc(reg));
+            outnum64(val);
+            /* mov [Reg], Reg */
+            ob(0x48); ob(0x89);
             ob(vreg_to_enc(reg) + vreg_to_enc(reg) * 8);
         }
         else
         {
-            /* mov reg, const */
+            /* mov Reg, const */
             reg = getReg(valid);
-            ob(0xb8 + vreg_to_enc(reg));
-            outnum(val);
+            ob(0x48); ob(0xb8 + vreg_to_enc(reg));
+            outnum64(val);
         }
     }
     else if (tag & V_LOCAL)
     {
         if (tag & V_FIRST) error("use of uninitialized local");
         reg = getReg(valid);
-        ob(0x67); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov eXx, [ebp - xxx] (long form) */
-        outnum(val * REG_SIZE);
+        ob(0x48); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
+        outnum32(val * REG_SIZE - REG_SIZE);
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY)) { /* nothing to do, just return register */ }
     else
@@ -445,16 +457,16 @@ static int g_lval(int valid)
         if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
         else if (tag & V_IMMED)
         {
-            /* mov reg, const */
+            /* mov Reg, const */
             reg = getReg(valid);
-            ob(0xb8 + vreg_to_enc(reg));
-            outnum(val);
+            ob(0x48); ob(0xb8 + vreg_to_enc(reg));
+            outnum64(val);
         }
         else if (tag & V_LOCAL)
         {
             reg = getReg(valid);
-            ob(0x67); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea eXx, [ebp - xxx] (long form) */
-            outnum(val * REG_SIZE);
+            ob(0x48); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
+            outnum32(val * REG_SIZE - REG_SIZE);
         }
     }
     else
@@ -471,12 +483,12 @@ static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
-    ob(0x48); ob(0x81); ob(0xec); outnum(0); /* sub rsp, xxx */
+    ob(0x48); ob(0x81); ob(0xec); outnum32(0); /* sub rsp, xxx */
     NC.numlocsp = C.codep - 4; /* save for endfunc to patch */
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 
-static void i_ret() { g_rval(V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
+static void i_ret() { g_rval(V_REG_RAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
 static void i_endfunc()
 {
     i_ret();
@@ -494,12 +506,12 @@ static void i_cmp(int op)
         { KW(==), 4 },
         { KW(!=), 5 },
     };
-    a = g_rval(V_REG_EAX);
+    a = g_rval(V_REG_RAX);
     into = g_rval(V_REG_ANY & ~a);
-    ob(0x39 + vreg_to_enc(a)); ob(0xc0 + vreg_to_enc(into)); /* cmp eXx, eax */
+    ob(0x48); ob(0x39 + vreg_to_enc(a)); ob(0xc0 + vreg_to_enc(into)); /* cmp eXx, eax */
 
-    ob(0xb8 + vreg_to_enc(into));
-    outnum(0);
+    ob(0x48); ob(0xb8 + vreg_to_enc(into));
+    outnum64(0);
     ob(0x0f);
     ob(0x90 + cmpccs[zvindexofnp(cmpccs, op, 6, 1)].cc);
     ob(0xc0 + vreg_to_enc(into));
@@ -515,14 +527,14 @@ static char* i_jmpc(int cond, char* prev)
     if (cond == J_UNCOND)
     {
         ob(0xe9);
-        outnum(prev ? prev - C.codeseg : 0);
+        outnum32(prev ? prev - C.codeseg : 0);
     }
     else
     {
         int reg = g_rval(V_REG_ANY);
         ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test eXx, eXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
-        outnum(prev ? prev - C.codeseg : 0);
+        outnum32(prev ? prev - C.codeseg : 0);
     }
     return C.codep - 4;
 }
@@ -543,7 +555,7 @@ static void i_store()
 {
     int val = g_rval(V_REG_ANY);
     int into = g_lval(V_REG_ANY & ~val);
-    ob(0x67); ob(0x89);
+    ob(0x48); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
@@ -718,23 +730,12 @@ static void fileinput()
     SKIP(T_END);
 }
 
-#if __unix__ || (__APPLE__ && __MACH__)
-    #include <sys/mman.h>
-    static void* zept_allocExec(int size) { return mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
-    static void zept_freeExec(void* p, int size) { munmap(p, size); }
-#elif _WIN32
-    #include <windows.h>
-    static void* zept_allocExec(int size) { return VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); }
-    static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
-#endif
-
-
 /*
  * main api entry point
  */
 int zeptRun(char* code)
 {
-    int ret, allocSize;
+    int ret, allocSize, i;
     memset(&C, 0, sizeof(C));
     C.input = code;
     allocSize = 1<<17;
@@ -766,12 +767,13 @@ int zeptRun(char* code)
         if (!C.entry) error("no entry point '__main__'");
         ret = ((int (*)())C.entry)();
     }
-    else
-        ret = -1;
+    else ret = -1;
     zvfree(C.tokens);
     zvfree(C.vst);
     zvfree(C.instrs);
     zvfree(C.locals);
+    for (i = 0; i < zvsize(C.strs); ++i) free(C.strs[i]);
+    zvfree(C.strs);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }
