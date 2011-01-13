@@ -58,7 +58,7 @@ extern int zeptRun(char* code);
 typedef struct Token {
     int type, pos;
     union {
-        char str[32];
+        char* str;
         int tokn;
     } data;
 } Token;
@@ -78,9 +78,9 @@ typedef struct Value {
 #define J_UNCOND 2
 
 typedef struct Context {
-    Token *tokens, **locals;
+    Token *tokens;
     int curtok, irpos;
-    char *input, *codeseg, *codep, *entry;
+    char *input, *codeseg, *codep, *entry, **strs, **locals;
     Value *instrs, *vst;
     jmp_buf errBuf;
     char errorText[512];
@@ -188,16 +188,18 @@ static void error(char *fmt, ...)
 
 static char KWS[] = " if elif else or for def return mod and not print pass << >> <= >= == != ";
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
-enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
-static Token* tokSetStr(Token* t, char* str)
+char* strintern(char* s)
 {
-    if (strlen(str) >= sizeof(t->data.str)) error("identifer too long");
-    strcpy(t->data.str, str);
-    t->data.str[sizeof(t->data.str) - 1] = 0;
-    return t;
+    int i;
+    for (i = 0; i < zvsize(C.strs); ++i)
+        if (strcmp(s, C.strs[i]) == 0)
+            return C.strs[i];
+    zvpush(C.strs, _strdup(s));
+    return zvlast(C.strs);
 }
-#define TOK(t) do { Token _ = { t, (int)(startpos - C.input) }; zvpush(C.tokens, *tokSetStr(&_, #t)); } while(0)
-#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input) }; zvpush(C.tokens, *tokSetStr(&_, s)); } while(0)
+enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
+#define TOK(t) do { Token _ = { t, (int)(startpos - C.input), strintern(#t) }; zvpush(C.tokens, _); } while(0)
+#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), strintern(s) }; zvpush(C.tokens, _); } while(0)
 #define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input) }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
@@ -329,6 +331,7 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 #define V_TEMP      0x20
 #define V_ADDR      0x40
 #define V_LOCAL     0x80
+#define V_FIRST     0x100 /* todo; i think this is crap. */
 
 enum { REG_SIZE = 4 }; /* we only use 32 bit values, even though we're running in x64 */
 #define ob(b) (*C.codep++ = (b))
@@ -396,42 +399,41 @@ static int getReg(int valid)
 
 static int g_rval(int valid)
 {
-    int reg;
-    if (zvlast(C.vst).tag.type & V_IMMED)
+    int reg, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
+    if (tag & V_IMMED)
     {
-        if (zvlast(C.vst).tag.type & V_ADDR)
+        if (tag & V_ADDR)
         {
             /* mov reg, const */
             reg = getReg(valid);
             ob(0xb8 + vreg_to_enc(reg));
-            outnum(zvlast(C.vst).data.i);
+            outnum(val);
             /* mov [reg], reg */
             ob(0x67); ob(0x89);
             ob(vreg_to_enc(reg) + vreg_to_enc(reg) * 8);
-            zvpop(C.vst);
         }
         else
         {
             /* mov reg, const */
             reg = getReg(valid);
             ob(0xb8 + vreg_to_enc(reg));
-            outnum(zvlast(C.vst).data.i);
-            zvpop(C.vst);
+            outnum(val);
         }
     }
-    else if (zvlast(C.vst).tag.type & V_LOCAL)
+    else if (tag & V_LOCAL)
     {
-        error("todo; here");
+        if (tag & V_FIRST) error("use of uninitialized local");
+        reg = getReg(valid);
+        ob(0x67); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov eXx, [ebp - xxx] (long form) */
+        outnum(val * REG_SIZE);
     }
-    else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY))
-    {
-        return reg;
-    }
+    else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY)) { /* nothing to do, just return register */ }
     else
     {
         /* todo; reg-reg move */
         error("internal error, unexpected stack state");
     }
+    zvpop(C.vst);
     return reg;
 }
 
@@ -451,8 +453,8 @@ static int g_lval(int valid)
         else if (tag & V_LOCAL)
         {
             reg = getReg(valid);
-            ob(0x67); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov eXx, [ebp - xxx] (long form) */
-            outnum(val);
+            ob(0x67); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea eXx, [ebp - xxx] (long form) */
+            outnum(val * REG_SIZE);
         }
     }
     else
@@ -464,7 +466,7 @@ static int g_lval(int valid)
 }
 
 static void i_const(int v) { VAL(V_IMMED, v); }
-static void i_addr(int v) { VAL(V_LOCAL | V_ADDR, v); }
+static void i_addr(int v, int extra) { VAL(V_LOCAL | V_ADDR | extra, v); }
 static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
@@ -478,7 +480,7 @@ static void i_ret() { g_rval(V_REG_EAX); ob(0xc9); /* leave */ ob(0xc3); /* ret 
 static void i_endfunc()
 {
     i_ret();
-    put32(NC.numlocsp, zvsize(C.locals) + 256); /* todo; XXX hardcoded # spills */
+    put32(NC.numlocsp, zvsize(C.locals) * REG_SIZE + 256); /* todo; XXX hardcoded # spills */
 }
 
 static void i_cmp(int op)
@@ -564,9 +566,10 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        Token* tmp = CURTOK;
-        if (!zvcontains(C.locals, tmp)) zvpush(C.locals, tmp);
-        i_addr(zvindexof(C.locals, tmp));
+        char* name = strintern(CURTOK->data.str);
+        int extra = 0;
+        if (!zvcontains(C.locals, name)) { zvpush(C.locals, name); extra = V_FIRST; }
+        i_addr(zvindexof(C.locals, name), extra);
         NEXT();
     }
     else error("unexpected atom");
@@ -696,6 +699,7 @@ static void suite()
 static void funcdef()
 {
     SKIP(KW(def));
+    zvfree(C.locals);
     i_func(CURTOK);
     SKIP(T_IDENT);
     SKIP('(');

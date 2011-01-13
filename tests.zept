@@ -137,6 +137,21 @@ def __main__():
     999
     return x
 
+### 0 assign, no ret
+def __main__():
+    x = 41
+
+### 123 assign two vars
+def __main__():
+    x = 123
+    y = x
+    x = 999
+    return y
+
+### -1 uninitialized local
+def __main__():
+    y = x
+
 ### 99999 END
 
 # vim: set ft=python:
