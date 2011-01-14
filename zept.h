@@ -18,14 +18,19 @@ ABOUT:
     ("zepto" is the SI prefix for 10e-21)
 
 
-TODO:
+TODO/NOTES:
 
     logic ops, and or not
     math functions, + - * / & | ^
     functions
         - indirected through global table for hotpatching
         - just add all interned names of functions to a list and use the index
-        in that list as func identifier (hash won't work so well)
+          in that list as func identifier (hash won't work so well)
+    need to know in body of function if name is a (global) function or not
+        - if assigned (anywhere in the body) it's a local for the whole body
+        - otherwise, it's a global function. only functions for now.
+        - hmm, scan sucks. how global if already defined, otherwise local
+          (works for funcs, except fwddecl, just allow def f(): pass at some poitn)
     function calls
     lists
     C function calls and runtime lib
@@ -68,11 +73,11 @@ extern int zeptRun(char* code);
 #include <ctype.h>
 #if __unix__ || (__APPLE__ && __MACH__)
     #include <sys/mman.h>
-    static void* zept_allocExec(int size) { return mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); }
+    static void* zept_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { munmap(p, size); }
 #elif _WIN32
     #include <windows.h>
-    static void* zept_allocExec(int size) { return VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); }
+    static void* zept_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
     #define strdup _strdup
 #endif
@@ -102,7 +107,7 @@ typedef struct Value {
 typedef struct Context {
     Token *tokens;
     int curtok, irpos;
-    char *input, *codeseg, *codep, *entry, **strs, **locals;
+    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs;
     Value *instrs, *vst;
     jmp_buf errBuf;
     char errorText[512];
@@ -124,7 +129,7 @@ static void suite();
 #define zvadd(a,n)                  (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])
 #define zvlast(a)                   ((a)[zv__zvn(a)-1])
 #define zvindexofnp(a,i,n,psize)    (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
-#define zvindexof(a,i)              (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),zv__zvn(a),sizeof(*(a))))
+#define zvindexof(a,i)              ((a) ? (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),zv__zvn(a),sizeof(*(a)))) : -1)
 #define zvcontainsnp(a,i,n,psize)   ((a) ? (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
 #define zvcontainsp(a,i,psize)      (zvcontainsnp((a),i,zv__zvn(a),psize))
 #define zvcontainsn(a,i,n)          ((a) ? (zvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
@@ -344,21 +349,22 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 
 /* x64 backend */
 
-#define V_IMMED     0x01
-#define V_REG_RAX   0x02
-#define V_REG_RCX   0x04
-#define V_REG_RDX   0x08
-#define V_REG_RBX   0x10
+#define V_IMMED     0x0001
+#define V_REG_RAX   0x0002
+#define V_REG_RCX   0x0004
+#define V_REG_RDX   0x0008
+#define V_REG_RBX   0x0010
 #define V_REG_ANY (V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX)
-#define V_TEMP      0x20
-#define V_ADDR      0x40
-#define V_LOCAL     0x80
+#define V_TEMP      0x0020
+#define V_ADDR      0x0040
+#define V_LOCAL     0x0080
+#define V_GLOBAL    0x0100
 
-enum { REG_SIZE = 8 };
+enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 #define ob(b) (*C.codep++ = (b))
 #define outnum32(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
     for (i = 0; i < 4; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
-#define outnum64(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
+#define outnum64(n) { unsigned long _ = (unsigned long)(n); unsigned long mask = 0xff; unsigned long sh = 0; int i; \
     for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
@@ -372,6 +378,20 @@ static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 4 };
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
+
+static char* functhunkaddr(int idx) { return C.codesegend - (idx + 1) * FUNC_THUNK_SIZE; }
+static void addfunc(char* name, char* addr)
+{
+    char* p;
+    if (zvcontains(C.funcnames, name)) error("%s already defined", name);
+    zvpush(C.funcnames, name);
+    zvpush(C.funcaddrs, addr);
+    p = functhunkaddr(zvsize(C.funcnames) - 1);
+    *p++ = 0xe9; /* jmp relimmed */
+    put32(p, addr - p - 4); p += 4;
+    *p++ = 0xcc; *p++ = 0xcc; *p++ = 0xcc; /* add int3 to rest of thunk */
+}
+static int funcidx(char* name) { char* p = strintern(name); return zvindexof(C.funcnames, p); }
 
 /* store the given register (offset) into the given stack slot */
 static void g_store(int reg, int slot)
@@ -420,6 +440,7 @@ static int getReg(int valid)
     return -1;
 }
 
+/* todo; dupe getReg calls */
 static int g_rval(int valid)
 {
     int reg, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
@@ -451,10 +472,15 @@ static int g_rval(int valid)
         ob(0x48); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
         outnum32(-val * REG_SIZE - REG_SIZE);
     }
-    else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY)) { /* nothing to do, just return register */ }
+    else if (tag & V_GLOBAL)
+    {
+        reg = getReg(valid);
+        ob(0x48); ob(0xb8); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
+    }
+    else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
     else
     {
-        /* todo; reg-reg move */
+        /* todo; reg-reg move, eg. in cx, need in ax */
         error("internal error, unexpected stack state");
     }
     zvpop(C.vst);
@@ -490,9 +516,11 @@ static int g_lval(int valid)
 }
 
 static void i_const(int v) { VAL(V_IMMED, v); }
-static void i_addr(int v) { VAL(V_LOCAL | V_ADDR, v); }
-static void i_func(Token* tok) {
-    if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
+static void i_addr(int v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL or V_GLOBAL */
+static void i_func(Token* tok)
+{
+    while (((unsigned long)C.codep) % 16 != 0) ob(0x90); /* nop to align */
+    addfunc(tok->data.str, C.codep);
     ob(0x55); /* push rbp */
     ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
     ob(0x48); ob(0x81); ob(0xec); outnum32(0); /* sub rsp, xxx */
@@ -571,6 +599,13 @@ static void i_store()
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
+static void i_call(int argcount)
+{
+    /* todo; push args */
+    g_rval(V_REG_RAX);
+    ob(0xff); ob(0xd0); /* call rax */
+}
+
 /*static void i_math(Value* v) {} */
 
 #endif
@@ -590,24 +625,51 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        char* name = strintern(CURTOK->data.str);
-        if (!zvcontains(C.locals, name)) zvpush(C.locals, name);
-        i_addr(zvindexof(C.locals, name));
+        if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_GLOBAL);
+        else
+        {
+            char* name = strintern(CURTOK->data.str);
+            if (!zvcontains(C.locals, name)) zvpush(C.locals, name);
+            i_addr(zvindexof(C.locals, name), V_LOCAL);
+        }
         NEXT();
     }
-    else error("unexpected atom");
+}
+
+static int arglist()
+{
+    return 0;
+}
+
+static int trailer()
+{
+    if (CURTOKt == '(')
+    {
+        NEXT();
+        int count = arglist();
+        SKIP(')');
+        i_call(count);
+        VAL(V_REG_RAX, -999); /* ret */
+    }
+    return 0;
+}
+
+static void power()
+{
+    atom();
+    while (trailer()) {}
 }
 
 static void comparison()
 {
     char cmps[] = { '<', '>', KW(<=), KW(>=), KW(==), KW(!=) };
-    atom();
+    power();
     for (;;)
     {
         Token* cmp = CURTOK;
         if (!zvcontainsn(cmps, CURTOKt, 6)) break;
         NEXT();
-        atom();
+        power();
         i_cmp(cmp->type);
     }
 }
@@ -746,7 +808,7 @@ static void fileinput()
  */
 int zeptRun(char* code)
 {
-    int ret, allocSize, i;
+    int ret, allocSize, i, entryidx;
     memset(&C, 0, sizeof(C));
     C.input = code;
     allocSize = 1<<17;
@@ -765,18 +827,20 @@ int zeptRun(char* code)
         }}
 #endif
         C.codeseg = C.codep = zept_allocExec(allocSize);
+        C.codesegend = C.codeseg + allocSize;
         fileinput();
 
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
         ret = system("ndisasm -b64 dump.dat"); }
 #endif
 
-        if (!C.entry) error("no entry point '__main__'");
-        ret = ((int (*)())C.entry)();
+        entryidx = funcidx("__main__");
+        if (entryidx == -1) error("no entry point '__main__'");
+        ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
     }
     else ret = -1;
     zvfree(C.tokens);
@@ -785,6 +849,7 @@ int zeptRun(char* code)
     zvfree(C.locals);
     for (i = 0; i < zvsize(C.strs); ++i) free(C.strs[i]);
     zvfree(C.strs);
+    zvfree(C.funcnames); zvfree(C.funcaddrs);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }

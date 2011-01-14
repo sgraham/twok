@@ -160,6 +160,28 @@ def __main__():
         y = x
     return y
 
+### 10 two funcs
+def stuff():
+    pass
+def __main__():
+    return 10
+
+### 19 call func
+def stuff():
+    return 19
+def __main__():
+    x = 15
+    return stuff()
+
+### 765 call func 2
+def stuff():
+    return 765
+def __main__():
+    x = 15
+    y = stuff()
+    z = 12
+    return y
+
 ### 99999 END
 
 # vim: set ft=python:
