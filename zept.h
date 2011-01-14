@@ -20,10 +20,22 @@ ABOUT:
 
 TODO:
 
-    everything
+    logic ops, and or not
+    math functions, + - * / & | ^
+    functions
+        - indirected through global table for hotpatching
+        - just add all interned names of functions to a list and use the index
+        in that list as func identifier (hash won't work so well)
+    function calls
+    lists
+    C function calls and runtime lib
+    mempush/pop for 'gc'
+    @var and free func for manual memory
+    uninit var tracking (make it optional?)
+    arm backend (on android ndk maybe)
 
 
-NOTES: (mostly internal)
+NOTES:
 
     register usage:
 
@@ -341,7 +353,6 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 #define V_TEMP      0x20
 #define V_ADDR      0x40
 #define V_LOCAL     0x80
-#define V_FIRST     0x100 /* todo; i think this is crap. */
 
 enum { REG_SIZE = 8 };
 #define ob(b) (*C.codep++ = (b))
@@ -434,7 +445,8 @@ static int g_rval(int valid)
     }
     else if (tag & V_LOCAL)
     {
-        if (tag & V_FIRST) error("use of uninitialized local");
+        /* todo; uninit var; keep shadow stack of initialized flags, error on
+         * read before write. need to figure out calling C lib */
         reg = getReg(valid);
         ob(0x48); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
         outnum32(val * REG_SIZE - REG_SIZE);
@@ -478,7 +490,7 @@ static int g_lval(int valid)
 }
 
 static void i_const(int v) { VAL(V_IMMED, v); }
-static void i_addr(int v, int extra) { VAL(V_LOCAL | V_ADDR | extra, v); }
+static void i_addr(int v) { VAL(V_LOCAL | V_ADDR, v); }
 static void i_func(Token* tok) {
     if (strcmp(tok->data.str, "__main__") == 0) C.entry = C.codep;
     ob(0x55); /* push rbp */
@@ -579,9 +591,8 @@ static void atom()
     else if (CURTOKt == T_IDENT)
     {
         char* name = strintern(CURTOK->data.str);
-        int extra = 0;
-        if (!zvcontains(C.locals, name)) { zvpush(C.locals, name); extra = V_FIRST; }
-        i_addr(zvindexof(C.locals, name), extra);
+        if (!zvcontains(C.locals, name)) zvpush(C.locals, name);
+        i_addr(zvindexof(C.locals, name));
         NEXT();
     }
     else error("unexpected atom");

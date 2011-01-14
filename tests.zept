@@ -148,9 +148,17 @@ def __main__():
     x = 999
     return y
 
-### -1 uninitialized local
+### -1 DISABLED uninitialized local
 def __main__():
     y = x
+
+### -1 DISABLED uninitialized local
+def __main__():
+    if 0:
+        x = 5
+    else:
+        y = x
+    return y
 
 ### 99999 END
 

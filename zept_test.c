@@ -23,7 +23,7 @@ void copyline(char** dest, char** src)
 
 int main(int argc, char** argv)
 {
-    int i = 0, ret, failCount = 0, passCount = 0, failed;
+    int i = 0, ret, failCount = 0, passCount = 0, disabledCount = 0, failed;
     int expectedRC;
     FILE* f = fopen("tests.zept", "rb");
     char* src = testdata;
@@ -44,7 +44,7 @@ int main(int argc, char** argv)
         *(desc - 1) = 0;
         if (strcmp(description, "END") == 0)
         {
-            printf("%d/%d tests passed\n", passCount, passCount + failCount);
+            printf("%d/%d tests passed (+%d disabled)\n", passCount, passCount + failCount, disabledCount);
             break;
         }
         dest = curtest;
@@ -54,6 +54,11 @@ int main(int argc, char** argv)
         if ((argc == 2 && atoi(argv[1]) != i)
                 || (argc == 3 && (atoi(argv[1]) > i || atoi(argv[2]) < i)))
                 continue;
+        if (strncmp(description, "DISABLED", 8) == 0)
+        {
+            disabledCount++;
+            continue;
+        }
         printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
         ret = zeptRun(curtest);
         failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
