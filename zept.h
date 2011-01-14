@@ -449,7 +449,7 @@ static int g_rval(int valid)
          * read before write. need to figure out calling C lib */
         reg = getReg(valid);
         ob(0x48); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
-        outnum32(val * REG_SIZE - REG_SIZE);
+        outnum32(-val * REG_SIZE - REG_SIZE);
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & V_REG_ANY)) { /* nothing to do, just return register */ }
     else
@@ -478,7 +478,7 @@ static int g_lval(int valid)
         {
             reg = getReg(valid);
             ob(0x48); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
-            outnum32(val * REG_SIZE - REG_SIZE);
+            outnum32(-val * REG_SIZE - REG_SIZE);
         }
     }
     else
@@ -504,7 +504,7 @@ static void i_ret() { g_rval(V_REG_RAX); ob(0xc9); /* leave */ ob(0xc3); /* ret 
 static void i_endfunc()
 {
     i_ret();
-    put32(NC.numlocsp, zvsize(C.locals) * REG_SIZE + 256); /* todo; XXX hardcoded # spills */
+    put32(NC.numlocsp, (zvsize(C.locals)+1) * REG_SIZE + 256); /* todo; XXX hardcoded # spills */
 }
 
 static void i_cmp(int op)
@@ -768,7 +768,7 @@ int zeptRun(char* code)
         fileinput();
 
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
