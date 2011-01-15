@@ -101,7 +101,7 @@ typedef struct Value {
     } data;
     int label;
 } Value;
-#define VAL(t, d) do { Value _ = { { (t) }, { (d) } }; zvpush(C.vst, _); } while(0)
+#define VAL(t, d) do { Value _ = { { (t) }, { (d) }, 0xbad1abe1 }; zvpush(C.vst, _); } while(0)
 #define J_UNCOND 2
 
 typedef struct Context {
@@ -122,7 +122,7 @@ static void suite();
  */
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
-#define zvfree(a)                   ((a) ? free(zv__zvraw(a)),(void*)0 : (void*)0)
+#define zvfree(a)                   ((a) ? (free(zv__zvraw(a)),(void*)0) : (void*)0)
 #define zvpush(a,v)                 (zv__zvmaybegrow(a,1), (a)[zv__zvn(a)++] = (v))
 #define zvpop(a)                    (assert(zv__zvn(a) > 0), zv__zvn(a)-=1)
 #define zvsize(a)                   ((a) ? zv__zvn(a) : 0)
@@ -133,6 +133,7 @@ static void suite();
 #define zvcontainsnp(a,i,n,psize)   ((a) ? (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
 #define zvcontainsp(a,i,psize)      (zvcontainsnp((a),i,zv__zvn(a),psize))
 #define zvcontainsn(a,i,n)          ((a) ? (zvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
+#define zvcontainsn_nonnull(a,i,n)  (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,sizeof(*(a)))!=-1) /* workaround for stupid warning */
 #define zvcontains(a,i)             ((a) ? (zvcontainsp((a),i,sizeof(*(a)))) : 0)
 
 #define zv__zvraw(a) ((int *) (a) - 2)
@@ -227,7 +228,7 @@ char* strintern(char* s)
 enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
 #define TOK(t) do { Token _ = { t, (int)(startpos - C.input), { strintern(#t) } }; zvpush(C.tokens, _); } while(0)
 #define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), { strintern(s) } }; zvpush(C.tokens, _); } while(0)
-#define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input) }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
+#define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input), { 0 } }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
 static void tokenize()
@@ -262,17 +263,16 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
             else
                 ++pos;
         }
-        if (column > zvlast(indents))
-        {
-            zvpush(indents, column);
-            TOK(T_NL);
-            TOK(T_INDENT);
-        }
         while (column < zvlast(indents))
         {
             if (!zvcontains(indents, column)) error("unindent does not match any outer indentation level");
             zvpop(indents);
             TOK(T_DEDENT);
+        }
+        if (column > zvlast(indents))
+        {
+            zvpush(indents, column);
+            TOK(T_INDENT);
         }
 
         while (*pos != '\n')
@@ -314,6 +314,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
                 else TOKI(tmp[0], tmp);
             }
         }
+        TOK(T_NL);
         ++pos;
     }
 }
@@ -396,6 +397,8 @@ static int funcidx(char* name) { char* p = strintern(name); return zvindexof(C.f
 /* store the given register (offset) into the given stack slot */
 static void g_store(int reg, int slot)
 {
+    (void)reg;
+    (void)slot;
     error("todo; spill");
 }
 
@@ -421,7 +424,7 @@ static int getReg(int valid)
         if ((C.vst[j].tag.type & valid))
         {
             /* and a location to spill it to */
-            for (i = 0; i < sizeof(NC.spills)/sizeof(NC.spills[0]); ++i)
+            for (i = 0; i < (int)(sizeof(NC.spills)/sizeof(NC.spills[0])); ++i)
                 if (!NC.spills[i]) break;
 
             /* and send it there and update the flags */
@@ -602,6 +605,7 @@ static void i_store()
 static void i_call(int argcount)
 {
     /* todo; push args */
+    (void)argcount;
     g_rval(V_REG_RAX);
     ob(0xff); ob(0xd0); /* call rax */
 }
@@ -668,7 +672,7 @@ static void comparison()
     for (;;)
     {
         Token* cmp = CURTOK;
-        if (!zvcontainsn(cmps, CURTOKt, 6)) break;
+        if (!zvcontainsn_nonnull(cmps, CURTOKt, 6)) break;
         NEXT();
         power();
         i_cmp(cmp->type);
@@ -717,6 +721,7 @@ static void expr_stmt()
         i_store();
     }
     else zvpop(C.vst); /* discard */
+    SKIP(T_NL);
 }
 
 static void stmt()
@@ -725,19 +730,21 @@ static void stmt()
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
-        if (CURTOKt == T_DEDENT) i_const(20710);
+        if (CURTOKt == T_NL || CURTOKt == T_DEDENT) i_const(20710);
         else or_test();
         i_ret();
+        SKIP(T_NL);
     }
     else if (CURTOKt == KW(print))
     {
         SKIP(KW(print));
         NEXT();
+        SKIP(T_NL);
     }
     else if (CURTOKt == KW(pass))
     {
         NEXT();
-        /* nothing */
+        SKIP(T_NL);
     }
     else if (CURTOKt == KW(if))
     {
@@ -832,7 +839,7 @@ int zeptRun(char* code)
         fileinput();
 
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
