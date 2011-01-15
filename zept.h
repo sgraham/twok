@@ -388,7 +388,7 @@ static void addfunc(char* name, char* addr)
     zvpush(C.funcaddrs, addr);
     p = functhunkaddr(zvsize(C.funcnames) - 1);
     *p++ = 0xe9; /* jmp relimmed */
-    put32(p, addr - p - 4); p += 4;
+    put32(p, (int)(addr - p - 4)); p += 4;
     *p++ = 0xcc; *p++ = 0xcc; *p++ = 0xcc; /* add int3 to rest of thunk */
 }
 static int funcidx(char* name) { char* p = strintern(name); return zvindexof(C.funcnames, p); }
@@ -645,8 +645,9 @@ static int trailer()
 {
     if (CURTOKt == '(')
     {
+        int count;
         NEXT();
-        int count = arglist();
+        count = arglist();
         SKIP(')');
         i_call(count);
         VAL(V_REG_RAX, -999); /* ret */

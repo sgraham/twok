@@ -19,7 +19,7 @@ void copyline(char** dest, char** src)
     }
 }
 
-/*#define VERBOSE*/
+#define VERBOSE
 
 int main(int argc, char** argv)
 {

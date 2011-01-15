@@ -126,7 +126,7 @@ def __main__():
 def __main__():
     return
 
-### -1 unexpected
+### 20710 return after no return
 def __main__():
     return
     return 19
