@@ -658,7 +658,14 @@ static void i_math(int op)
         ob(0xc0 + vreg_to_enc(v0) + vreg_to_enc(v1) * 8);
         VAL(op == '*' ? v1 : v0, 0); /* bleh, extended imul args backwards? */
     }
-    else error("todo; / %");
+    else if (op == '/' || op == '%')
+    {
+        int v1 = g_rval(V_REG_ANY & ~(V_REG_RAX | V_REG_RDX));
+        g_rval(V_REG_RAX);
+        ob(0x48); ob(0x99); /* cqo (sign extend rax into rdx) */
+        ob(0x48); ob(0xf7); ob(0xf8 + vreg_to_enc(v1)); /* idiv rXx */
+        VAL(op == '/' ? V_REG_RAX : V_REG_RDX, 0); /* quotient in A, remainder in D */
+    }
 }
 
 #endif

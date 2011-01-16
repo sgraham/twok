@@ -287,6 +287,19 @@ def __main__():
 ### 0 bitxor 0
 def __main__():
     return 255 ^ 255
-### 99999 END
 
+### 20 div 0
+def __main__():
+    return 200 / 10
+
+### -20 DISABLED div 1
+# no unary - or grouping () yet!
+def __main__():
+    return -200 / 10
+
+### 20 mod 0
+def __main__():
+    return 120 % 50
+
+### 99999 END
 # vim: set ft=python:
