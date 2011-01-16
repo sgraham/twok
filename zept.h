@@ -503,7 +503,6 @@ static int g_rval(int valid)
     }
     else
     {
-        /* todo; reg-reg move, eg. in cx, need in ax */
         error("internal error, unexpected stack state");
     }
     zvpop(C.vst);
@@ -649,7 +648,7 @@ static void i_math(int op)
         { '&', 0x21 },
         { '^', 0x31 },
         { '|', 0x09 } };
-    int opi = zvindexofnp(map, op, 5, 1);
+    int opi = zvindexofnp(map, op, 6, 1);
     if (opi >= 0 || op == '*')
     {
         int v1 = g_rval(V_REG_ANY);
@@ -657,7 +656,7 @@ static void i_math(int op)
         ob(0x48); ob(map[opi].opc);
         if (op == '*') ob(0xaf);
         ob(0xc0 + vreg_to_enc(v0) + vreg_to_enc(v1) * 8);
-        VAL(op == '*' ? v1 : v0, 0);
+        VAL(op == '*' ? v1 : v0, 0); /* bleh, extended imul args backwards? */
     }
     else error("todo; / %");
 }
@@ -769,7 +768,7 @@ static void and_expr()
     while (CURTOKt == '&')
     {
         int op = CURTOKt;
-        SKIP(KW('&'));
+        SKIP('&');
         arith_expr();
         i_math(op);
     }
@@ -781,7 +780,7 @@ static void xor_expr()
     while (CURTOKt == '^')
     {
         int op = CURTOKt;
-        SKIP(KW('^'));
+        SKIP('^');
         and_expr();
         i_math(op);
     }
@@ -793,7 +792,7 @@ static void expr()
     while (CURTOKt == '|')
     {
         int op = CURTOKt;
-        SKIP(KW('|'));
+        SKIP('|');
         xor_expr();
         i_math(op);
     }
@@ -979,7 +978,7 @@ int zeptRun(char* code)
         fileinput();
         //assert(zvsize(C.vst) == 0);
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
