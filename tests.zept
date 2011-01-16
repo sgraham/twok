@@ -216,6 +216,22 @@ def __main__():
         return 33
     return 0
 
+### 0 basic and 0
+def __main__():
+    return 1 and 0
+
+### 11 basic and 1
+def __main__():
+    return 1 and 11
+
+### 0 basic and 2
+def __main__():
+    return 46 and 0 and 1
+
+### 91 basic and 3
+def __main__():
+    return 46 and 1 and 1 and 91
+
 ### 99999 END
 
 # vim: set ft=python:

@@ -608,10 +608,10 @@ static void i_store()
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
-static void i_storelocal(int v)
+static void i_storelocal(int loc)
 {
     int val = g_rval(V_REG_ANY);
-    i_addr(v, V_LOCAL);
+    i_addr(loc, V_LOCAL);
     int into = g_lval(V_REG_ANY & ~val);
     ob(0x48); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
@@ -715,38 +715,31 @@ static void not_test()
         comparison();
 }
 
-static void and_test()
-{
-    not_test();
-    while (CURTOKt == KW(and))
-    {
-        SKIP(KW(and));
-        error("todo;");
-        not_test();
-    }
+#define BOOLOP(name, sub, kw, cond)             \
+static void name()                              \
+{                                               \
+    char *label = 0;                            \
+    sub();                                      \
+    if (CURTOKt == KW(kw))                      \
+    {                                           \
+        int tmp = genlocal(), done = 0;         \
+        for (;;)                                \
+        {                                       \
+            i_storelocal(tmp);                  \
+            i_addr(tmp, V_LOCAL);               \
+            label = i_jmpc(cond, label);        \
+            if (done) break;                    \
+            SKIP(KW(kw));                       \
+            sub();                              \
+            done = CURTOKt != KW(kw);           \
+        }                                       \
+        i_addr(tmp, V_LOCAL);                   \
+    }                                           \
+    i_label(label);                             \
 }
+BOOLOP(and_test, not_test, and, 0)
+BOOLOP(or_test, and_test, or, 1)
 
-static void or_test()
-{
-    char* label = 0;
-    and_test();
-    if (CURTOKt == KW(or))
-    {
-        int tmp = genlocal(), done = 0;
-        for (;;)
-        {
-            i_storelocal(tmp);
-            i_addr(tmp, V_LOCAL);
-            label = i_jmpc(1, label);
-            if (done) break;
-            SKIP(KW(or));
-            and_test();
-            done = CURTOKt != KW(or);
-        }
-        i_addr(tmp, V_LOCAL);
-    }
-    i_label(label);
-}
 static void expr_stmt()
 {
     or_test();
