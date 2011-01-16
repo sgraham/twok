@@ -359,13 +359,13 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 #define V_REG_RCX   0x0004
 #define V_REG_RDX   0x0008
 #define V_REG_RBX   0x0010
-#define V_REG_ANY (V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX)
+#define V_REG_BOOL  V_REG_RBX
+#define V_REG_ANY   (V_REG_RAX | V_REG_RCX | V_REG_RDX)
 #define V_TEMP      0x0020
 #define V_ADDR      0x0040
 #define V_LOCAL     0x0080
 #define V_GLOBAL    0x0100
-#define V_JMP_Z     0x0200
-#define V_JMP_NZ    0x0200
+#define V_BOOLOP    0x0200
 
 enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 #define ob(b) (*C.codep++ = (b))
@@ -485,6 +485,7 @@ static int g_rval(int valid)
         reg = getReg(valid);
         ob(0x48); ob(0xb8); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
+    else if ((tag & V_BOOLOP) && (reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* don't pop and return register */ }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
     else
     {
@@ -570,7 +571,7 @@ static void i_cmp(int op)
  * list to previous items that are going to jump to the same final location so
  * that when the jump target is reached we can fix them all up by walking the
  * list that we created. */
-static char* i_jmpc_ex(int cond, char* prev, int *reg)
+static char* i_jmpc_ex(int cond, char* prev, int boolop)
 {
     if (cond == J_UNCOND)
     {
@@ -579,14 +580,19 @@ static char* i_jmpc_ex(int cond, char* prev, int *reg)
     }
     else
     {
-        *reg = g_rval(V_REG_ANY);
-        ob(0x48); ob(0x85); ob(0xc0 + vreg_to_enc(*reg) * 9); /* test rXx, rXx */
+        int reg = g_rval(V_REG_ANY | (boolop ? V_REG_BOOL : 0));
+        ob(0x48); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum32(prev ? prev - C.codeseg : 0);
     }
     return C.codep - 4;
 }
-static char* i_jmpc(int cond, char* prev) { int reg; return i_jmpc_ex(cond, prev, &reg); }
+static char* i_jmpc(int cond, char* prev) { return i_jmpc_ex(cond, prev, 0); }
+
+static void i_booltmp()
+{
+    VAL(g_rval(V_REG_BOOL), 0);
+}
 
 static void i_label(char* p)
 {
@@ -710,19 +716,13 @@ static void and_test()
 static void or_test()
 {
     char* label = 0;
-    int reg = 0;
-    VAL(V_IMMED, 0x123456);
     for (;;)
     {
-        zvpop(C.vst);
         and_test();
-        if (CURTOKt != KW(or))
-        {
-            break;
-        }
+        if (CURTOKt != KW(or)) break;
         SKIP(KW(or));
-        label = i_jmpc_ex(1, label, &reg);
-        VAL(reg, -999);
+        i_booltmp();
+        label = i_jmpc_ex(1, label, 1);
     }
     i_label(label);
 }
@@ -852,7 +852,7 @@ int zeptRun(char* code)
         C.codeseg = C.codep = zept_allocExec(allocSize);
         C.codesegend = C.codeseg + allocSize;
         fileinput();
-        assert(zvsize(C.vst) == 0);
+        //assert(zvsize(C.vst) == 0);
         /* dump disassembly of generated code, needs ndisasm in path */
 #if 1
         { FILE* f = fopen("dump.dat", "wb");
