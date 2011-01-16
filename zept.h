@@ -20,7 +20,6 @@ ABOUT:
 
 TODO/NOTES:
 
-    logic ops, and or not
     math functions, + - * / & | ^
     function calls
     lists
@@ -45,6 +44,15 @@ NOTES: (mostly internal mumbling)
         - otherwise, it's a global function. only functions for now.
         - hmm, scan sucks. how about: global if already defined, otherwise local
           (works for funcs, except fwddecl, allow def f(): pass at some point)
+    logic ops, and or:
+        - allocate a stack tmp
+        - store the value to check into tmp then branch if nz/z
+        - reload stack for TOS at end of all or/ands
+        - keeping reg alloc working is tricky because running through code in 
+          straight line, so TOS doesn't mirror branching or bool ops. using
+          stack means that the registers/vst aren't affected outside each arm
+          of the or/and conditions.
+    not: just == 0 and back into reg
 
 
 NOTES:
@@ -452,7 +460,7 @@ static int getReg(int valid)
 
 static int g_rval(int valid)
 {
-    int reg, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
+    int reg, reg2, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
     if (tag & V_IMMED)
     {
         if (tag & V_ADDR)
@@ -487,6 +495,12 @@ static int g_rval(int valid)
         ob(0x48); ob(0xb8); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
+    else if ((reg2 = (zvlast(C.vst).tag.type & V_REG_ANY)))
+    {
+        /* in a register, but not the one we need */
+        int reg = getReg(valid);
+        ob(0x48); ob(0x89); ob(0xc0 + vreg_to_enc(reg) + vreg_to_enc(reg2) * 8); /* mov rXx, rXx */
+    }
     else
     {
         /* todo; reg-reg move, eg. in cx, need in ax */
@@ -709,7 +723,9 @@ static void not_test()
     if (CURTOKt == KW(not))
     {
         SKIP(KW(not));
-        not_test();
+        comparison();
+        VAL(V_IMMED, 0);
+        i_cmp(KW(==));
     }
     else
         comparison();
@@ -868,7 +884,7 @@ int zeptRun(char* code)
         fileinput();
         //assert(zvsize(C.vst) == 0);
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);

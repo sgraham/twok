@@ -232,6 +232,22 @@ def __main__():
 def __main__():
     return 46 and 1 and 1 and 91
 
+### 0 basic not 0
+def __main__():
+    return not 1
+
+### 0 basic not 1
+def __main__():
+    return not 453
+
+### 1 basic not 2
+def __main__():
+    return not 0
+
+### 1 basic not 3
+def __main__():
+    return not 4 or not 0
+
 ### 99999 END
 
 # vim: set ft=python:
