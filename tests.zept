@@ -248,6 +248,34 @@ def __main__():
 def __main__():
     return not 4 or not 0
 
+### 2 add 0
+def __main__():
+    return 1+1
+
+### 1387 add 1
+def __main__():
+    return 43+10+100+1234
+
+### -10 sub 0
+def __main__():
+    return 10-20
+
+### -110 sub 1
+def __main__():
+    return 100 - 200 - 10
+
+### 15 mul 0
+def __main__():
+    return 3*5
+
+### 2000 mul 1
+def __main__():
+    return 20*100
+
+### 31 combined math 0
+def __main__():
+    return 2*5+7*3
+
 ### 99999 END
 
 # vim: set ft=python:

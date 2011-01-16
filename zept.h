@@ -21,7 +21,7 @@ ABOUT:
 TODO/NOTES:
 
     math functions, + - * / & | ^
-    function calls
+    function call args
     lists
     C function calls and runtime lib
     mempush/pop for 'gc'
@@ -639,7 +639,28 @@ static void i_call(int argcount)
     ob(0xff); ob(0xd0); /* call rax */
 }
 
-/*static void i_math(Value* v) {} */
+/* + - * / % & | ^ */
+static void i_math(int op)
+{
+    struct { char math, opc; } map[] = { /* maps KW to x64 instr */
+        { '+', 0x01 },
+        { '-', 0x29 },
+        { '*', 0x0f }, /* actually 0f af */
+        { '&', 0x21 },
+        { '^', 0x31 },
+        { '|', 0x09 } };
+    int opi = zvindexofnp(map, op, 5, 1);
+    if (opi >= 0 || op == '*')
+    {
+        int v1 = g_rval(V_REG_ANY);
+        int v0 = g_rval(V_REG_ANY & ~v1);
+        ob(0x48); ob(map[opi].opc);
+        if (op == '*') ob(0xaf);
+        ob(0xc0 + vreg_to_enc(v0) + vreg_to_enc(v1) * 8);
+        VAL(op == '*' ? v1 : v0, 0);
+    }
+    else error("todo; / %");
+}
 
 #endif
 
@@ -698,22 +719,96 @@ static int trailer()
     return 0;
 }
 
-static void power()
+static void atomplus()
 {
     atom();
     while (trailer()) {}
 }
 
+static void factor()
+{
+    if (CURTOKt == '+' || CURTOKt == '-' || CURTOKt == '~')
+    {
+        /*int op = CURTOKt;*/
+        NEXT();
+        factor();
+        /*i_mathunary(op);*/
+    }
+    else
+    {
+        atomplus();
+    }
+}
+
+static void term()
+{
+    factor();
+    while (CURTOKt == '*' || CURTOKt == '/' || CURTOKt == '%')
+    {
+        int op = CURTOKt;
+        NEXT();
+        factor();
+        i_math(op);
+    }
+}
+
+static void arith_expr()
+{
+    term();
+    while (CURTOKt == '+' || CURTOKt == '-')
+    {
+        int op = CURTOKt;
+        NEXT();
+        term();
+        i_math(op);
+    }
+}
+static void and_expr()
+{
+    arith_expr();
+    while (CURTOKt == '&')
+    {
+        int op = CURTOKt;
+        SKIP(KW('&'));
+        arith_expr();
+        i_math(op);
+    }
+}
+
+static void xor_expr()
+{
+    and_expr();
+    while (CURTOKt == '^')
+    {
+        int op = CURTOKt;
+        SKIP(KW('^'));
+        and_expr();
+        i_math(op);
+    }
+}
+
+static void expr()
+{
+    xor_expr();
+    while (CURTOKt == '|')
+    {
+        int op = CURTOKt;
+        SKIP(KW('|'));
+        xor_expr();
+        i_math(op);
+    }
+}
+
 static void comparison()
 {
     char cmps[] = { '<', '>', KW(<=), KW(>=), KW(==), KW(!=) };
-    power();
+    expr();
     for (;;)
     {
         Token* cmp = CURTOK;
         if (!zvcontainsn_nonnull(cmps, CURTOKt, 6)) break;
         NEXT();
-        power();
+        expr();
         i_cmp(cmp->type);
     }
 }
@@ -884,7 +979,7 @@ int zeptRun(char* code)
         fileinput();
         //assert(zvsize(C.vst) == 0);
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
