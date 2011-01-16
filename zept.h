@@ -29,7 +29,10 @@ TODO/NOTES:
     @var and free func for manual memory
     uninit var tracking (make it optional?)
     arm backend (on android ndk maybe)
+
     dupe getReg calls in g_rval
+    share genlocal and atom.T_IDENT
+
 
 NOTES: (mostly internal mumbling)
 
@@ -359,13 +362,11 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 #define V_REG_RCX   0x0004
 #define V_REG_RDX   0x0008
 #define V_REG_RBX   0x0010
-#define V_REG_BOOL  V_REG_RBX
-#define V_REG_ANY   (V_REG_RAX | V_REG_RCX | V_REG_RDX)
+#define V_REG_ANY   (V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX)
 #define V_TEMP      0x0020
 #define V_ADDR      0x0040
 #define V_LOCAL     0x0080
 #define V_GLOBAL    0x0100
-#define V_BOOLOP    0x0200
 
 enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 #define ob(b) (*C.codep++ = (b))
@@ -380,7 +381,7 @@ typedef struct NativeContext {
 } NativeContext;
 static NativeContext NC;
 
-static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 4 };
+static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 3 };
 #define vreg_to_enc(vr) RegCatToRegOffset[((vr) >> 2)]
 
 #define put32(p, n) (*(int*)(p) = (n))
@@ -485,7 +486,6 @@ static int g_rval(int valid)
         reg = getReg(valid);
         ob(0x48); ob(0xb8); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
-    else if ((tag & V_BOOLOP) && (reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* don't pop and return register */ }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
     else
     {
@@ -571,7 +571,7 @@ static void i_cmp(int op)
  * list to previous items that are going to jump to the same final location so
  * that when the jump target is reached we can fix them all up by walking the
  * list that we created. */
-static char* i_jmpc_ex(int cond, char* prev, int boolop)
+static char* i_jmpc(int cond, char* prev)
 {
     if (cond == J_UNCOND)
     {
@@ -580,18 +580,12 @@ static char* i_jmpc_ex(int cond, char* prev, int boolop)
     }
     else
     {
-        int reg = g_rval(V_REG_ANY | (boolop ? V_REG_BOOL : 0));
+        int reg = g_rval(V_REG_ANY);
         ob(0x48); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum32(prev ? prev - C.codeseg : 0);
     }
     return C.codep - 4;
-}
-static char* i_jmpc(int cond, char* prev) { return i_jmpc_ex(cond, prev, 0); }
-
-static void i_booltmp()
-{
-    VAL(g_rval(V_REG_BOOL), 0);
 }
 
 static void i_label(char* p)
@@ -614,6 +608,15 @@ static void i_store()
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
+static void i_storelocal(int v)
+{
+    int val = g_rval(V_REG_ANY);
+    i_addr(v, V_LOCAL);
+    int into = g_lval(V_REG_ANY & ~val);
+    ob(0x48); ob(0x89);
+    ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
+}
+
 static void i_call(int argcount)
 {
     /* todo; push args */
@@ -631,6 +634,16 @@ static void i_call(int argcount)
  */
 #define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK->data.str); NEXT(); } while(0)
+
+static int genlocal()
+{
+    static int count = 0;
+    char buf[128], *name;
+    sprintf(buf, "$loc%d", count++);
+    name = strintern(buf);
+    if (!zvcontains(C.locals, name)) zvpush(C.locals, name);
+    return zvindexof(C.locals, name);
+}
 
 static void atom()
 {
@@ -716,13 +729,21 @@ static void and_test()
 static void or_test()
 {
     char* label = 0;
-    for (;;)
+    and_test();
+    if (CURTOKt == KW(or))
     {
-        and_test();
-        if (CURTOKt != KW(or)) break;
-        SKIP(KW(or));
-        i_booltmp();
-        label = i_jmpc_ex(1, label, 1);
+        int tmp = genlocal(), done = 0;
+        for (;;)
+        {
+            i_storelocal(tmp);
+            i_addr(tmp, V_LOCAL);
+            label = i_jmpc(1, label);
+            if (done) break;
+            SKIP(KW(or));
+            and_test();
+            done = CURTOKt != KW(or);
+        }
+        i_addr(tmp, V_LOCAL);
     }
     i_label(label);
 }
@@ -854,7 +875,7 @@ int zeptRun(char* code)
         fileinput();
         //assert(zvsize(C.vst) == 0);
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
