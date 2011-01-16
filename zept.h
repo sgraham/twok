@@ -6,7 +6,7 @@ Before including,
 
     #define ZEPT_DEFINE_IMPLEMENTATION
 
-in the file that you want to have the implementation.
+in *one* C file that you want to contain the implementation.
 
 
 ABOUT:
@@ -20,7 +20,6 @@ ABOUT:
 
 TODO/NOTES:
 
-    math functions, + - * / & | ^
     function call args
     lists
     C function calls and runtime lib
@@ -53,6 +52,9 @@ NOTES: (mostly internal mumbling)
           stack means that the registers/vst aren't affected outside each arm
           of the or/and conditions.
     not: just == 0 and back into reg
+    math functions, + - * / & | ^
+        - poorly tested so far
+        - no unary ops, no grouping ()s
 
 
 NOTES:
@@ -338,50 +340,18 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
  * backends, define one of them.
  */
 
-#if 0
-
-/* diagnostic 'backend', just prints out IR but doesn't run it */
-
-static int IRpos;
-static void i_const(int v) { printf("%5d: const %d\n", IRpos++, v); }
-static void i_addr(int v) { printf("%5d: addr %d\n", IRpos++, v); }
-static void i_func(Token* tok) { printf("%5d: func %s\n", IRpos++, tok->data.str); }
-static void i_ret() { printf("%5d: ret\n", IRpos++); }
-static void i_cmp(int op) { printf("%5d: cmp %c%c\n", IRpos++, op < T_KW ? op : KWS[op-T_KW], op < T_KW ? ' ' : KWS[op-T_KW+1]); }
-static char* i_jmpc(int cond, char* prev)
-{
-    printf("%5d: jmpc %s ->%p\n", IRpos++, cond == 0 ? "false" : (cond == 1 ? "true" : "uncond"), prev);
-    return (char*)(unsigned long)(IRpos - 1);
-}
-static void i_label(char* lab)
-{
-    unsigned long li = (unsigned long)lab;
-    printf("       fixup to here at %ld\n", li);
-}
-static void i_store() { printf("%5d: store\n", C.irpos++); }
-/*static void i_math(Value* v) { printf("%5d: math\n", C.irpos); }*/
-
-#elif defined(_M_X64) || defined(__amd64__)
-
 /* x64 backend */
+#if defined(_M_X64) || defined(__amd64__)
 
-#define V_IMMED     0x0001
-#define V_REG_RAX   0x0002
-#define V_REG_RCX   0x0004
-#define V_REG_RDX   0x0008
-#define V_REG_RBX   0x0010
-#define V_REG_ANY   (V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX)
-#define V_TEMP      0x0020
-#define V_ADDR      0x0040
-#define V_LOCAL     0x0080
-#define V_GLOBAL    0x0100
+enum { V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
+       V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX,
+       V_IMMED=0x0010, V_TEMP=0x0020, V_ADDR=0x0040, V_LOCAL=0x0080, V_GLOBAL=0x0100, };
 
 enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
+
 #define ob(b) (*C.codep++ = (b))
-#define outnum32(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; \
-    for (i = 0; i < 4; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
-#define outnum64(n) { unsigned long _ = (unsigned long)(n); unsigned long mask = 0xff; unsigned long sh = 0; int i; \
-    for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
+#define outnum32(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; for (i = 0; i < 4; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
+#define outnum64(n) { unsigned long _ = (unsigned long)(n); unsigned long mask = 0xff; unsigned long sh = 0; int i; for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
     int spills[64]; /* is the Nth spill location in use? */
@@ -390,7 +360,7 @@ typedef struct NativeContext {
 static NativeContext NC;
 
 static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 3 };
-#define vreg_to_enc(vr) RegCatToRegOffset[((vr) >> 2)]
+#define vreg_to_enc(vr) RegCatToRegOffset[((vr) >> 1)]
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
@@ -746,64 +716,23 @@ static void factor()
     }
 }
 
-static void term()
-{
-    factor();
-    while (CURTOKt == '*' || CURTOKt == '/' || CURTOKt == '%')
-    {
-        int op = CURTOKt;
-        NEXT();
-        factor();
-        i_math(op);
-    }
+#define EXPRP(name, sub, math, tok0, tok1, tok2)                        \
+static void name()                                                      \
+{                                                                       \
+    sub();                                                              \
+    while (CURTOKt == tok0 || CURTOKt == tok1 || CURTOKt == tok2)       \
+    {                                                                   \
+        int op = CURTOKt;                                               \
+        NEXT();                                                         \
+        sub();                                                          \
+        math(op);                                                       \
+    }                                                                   \
 }
-
-static void arith_expr()
-{
-    term();
-    while (CURTOKt == '+' || CURTOKt == '-')
-    {
-        int op = CURTOKt;
-        NEXT();
-        term();
-        i_math(op);
-    }
-}
-static void and_expr()
-{
-    arith_expr();
-    while (CURTOKt == '&')
-    {
-        int op = CURTOKt;
-        SKIP('&');
-        arith_expr();
-        i_math(op);
-    }
-}
-
-static void xor_expr()
-{
-    and_expr();
-    while (CURTOKt == '^')
-    {
-        int op = CURTOKt;
-        SKIP('^');
-        and_expr();
-        i_math(op);
-    }
-}
-
-static void expr()
-{
-    xor_expr();
-    while (CURTOKt == '|')
-    {
-        int op = CURTOKt;
-        SKIP('|');
-        xor_expr();
-        i_math(op);
-    }
-}
+EXPRP(term, factor, i_math, '*', '/', '%')
+EXPRP(arith_expr, term, i_math, '+', '-', '-')
+EXPRP(and_expr, arith_expr, i_math, '&', '&', '&')
+EXPRP(xor_expr, and_expr, i_math, '^', '^', '^')
+EXPRP(expr, xor_expr, i_math, '|', '|', '|')
 
 static void comparison()
 {
