@@ -126,7 +126,7 @@ def __main__():
 def __main__():
     return
 
-### 20710 return after no return
+### 20710 ret after noval ret
 def __main__():
     return
     return 19
@@ -181,6 +181,36 @@ def __main__():
     y = stuff()
     z = 12
     return y
+
+### 3 basic or
+def __main__():
+    return 0 or 3
+
+### 19 basic or 2
+def __main__():
+    return 0 or 19 or 3
+
+### 10 basic or 3
+def __main__():
+    return 10 or 19 or 3
+
+### 0 basic or 4
+def __main__():
+    return 0 or 0
+
+### 1 basic or 5
+def __main__():
+    return 1 or 0 or 0 or 0 or 15
+
+### 15 basic or 6
+def __main__():
+    return 0 or 0 or 15
+
+### 33 if with or
+def __main__():
+    if 0 or 1:
+        return 33
+    return 0
 
 ### 99999 END
 

@@ -22,15 +22,6 @@ TODO/NOTES:
 
     logic ops, and or not
     math functions, + - * / & | ^
-    functions
-        - indirected through global table for hotpatching
-        - just add all interned names of functions to a list and use the index
-          in that list as func identifier (hash won't work so well)
-    need to know in body of function if name is a (global) function or not
-        - if assigned (anywhere in the body) it's a local for the whole body
-        - otherwise, it's a global function. only functions for now.
-        - hmm, scan sucks. how global if already defined, otherwise local
-          (works for funcs, except fwddecl, just allow def f(): pass at some poitn)
     function calls
     lists
     C function calls and runtime lib
@@ -38,6 +29,19 @@ TODO/NOTES:
     @var and free func for manual memory
     uninit var tracking (make it optional?)
     arm backend (on android ndk maybe)
+    dupe getReg calls in g_rval
+
+NOTES: (mostly internal mumbling)
+
+    functions
+        - indirected through global table for hotpatching
+        - just add all interned names of functions to a list and use the index
+          in that list as func identifier (hash won't work so well)
+    need to know in body of function if name is a (global) function or not
+        - if assigned (anywhere in the body) it's a local for the whole body
+        - otherwise, it's a global function. only functions for now.
+        - hmm, scan sucks. how about: global if already defined, otherwise local
+          (works for funcs, except fwddecl, allow def f(): pass at some point)
 
 
 NOTES:
@@ -360,6 +364,8 @@ static void i_store() { printf("%5d: store\n", C.irpos++); }
 #define V_ADDR      0x0040
 #define V_LOCAL     0x0080
 #define V_GLOBAL    0x0100
+#define V_JMP_Z     0x0200
+#define V_JMP_NZ    0x0200
 
 enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 #define ob(b) (*C.codep++ = (b))
@@ -443,7 +449,6 @@ static int getReg(int valid)
     return -1;
 }
 
-/* todo; dupe getReg calls */
 static int g_rval(int valid)
 {
     int reg, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
@@ -565,7 +570,7 @@ static void i_cmp(int op)
  * list to previous items that are going to jump to the same final location so
  * that when the jump target is reached we can fix them all up by walking the
  * list that we created. */
-static char* i_jmpc(int cond, char* prev)
+static char* i_jmpc_ex(int cond, char* prev, int *reg)
 {
     if (cond == J_UNCOND)
     {
@@ -574,13 +579,14 @@ static char* i_jmpc(int cond, char* prev)
     }
     else
     {
-        int reg = g_rval(V_REG_ANY);
-        ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test eXx, eXx */
+        *reg = g_rval(V_REG_ANY);
+        ob(0x48); ob(0x85); ob(0xc0 + vreg_to_enc(*reg) * 9); /* test rXx, rXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum32(prev ? prev - C.codeseg : 0);
     }
     return C.codep - 4;
 }
+static char* i_jmpc(int cond, char* prev) { int reg; return i_jmpc_ex(cond, prev, &reg); }
 
 static void i_label(char* p)
 {
@@ -703,13 +709,22 @@ static void and_test()
 
 static void or_test()
 {
-    and_test();
-    while (CURTOKt == KW(or))
+    char* label = 0;
+    int reg = 0;
+    VAL(V_IMMED, 0x123456);
+    for (;;)
     {
-        SKIP(KW(or));
-        error("todo;");
+        zvpop(C.vst);
         and_test();
+        if (CURTOKt != KW(or))
+        {
+            break;
+        }
+        SKIP(KW(or));
+        label = i_jmpc_ex(1, label, &reg);
+        VAL(reg, -999);
     }
+    i_label(label);
 }
 static void expr_stmt()
 {
@@ -749,7 +764,7 @@ static void stmt()
     else if (CURTOKt == KW(if))
     {
         SKIP(KW(if));
-        comparison();
+        or_test();
 
         labeltest = i_jmpc(0, 0);
         suite();
@@ -761,7 +776,7 @@ static void stmt()
             NEXT();
             if (PREVTOK.type == KW(elif))
             {
-                comparison();
+                or_test();
                 labeltest = i_jmpc(0, 0);
             }
             else labeltest = 0;
@@ -837,9 +852,9 @@ int zeptRun(char* code)
         C.codeseg = C.codep = zept_allocExec(allocSize);
         C.codesegend = C.codeseg + allocSize;
         fileinput();
-
+        assert(zvsize(C.vst) == 0);
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
