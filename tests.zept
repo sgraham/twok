@@ -321,5 +321,17 @@ def __main__():
 def __main__():
     return +123
 
+### 80 non-parens
+def __main__():
+    return 100-220 % 100
+
+### -20 parens
+def __main__():
+    return (100-220) % 100
+
+### -1 ')' expected
+def __main__():
+    return (100 % 100
+
 ### 99999 END
 # vim: set ft=python:

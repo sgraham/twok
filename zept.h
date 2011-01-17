@@ -20,8 +20,6 @@ ABOUT:
 
 TODO/NOTES:
 
-    parens for precedence
-    unary ops
     function call args
     lists
     C function calls and runtime lib
@@ -29,7 +27,7 @@ TODO/NOTES:
     @var and free func for manual memory
     uninit var tracking (make it optional?)
     arm backend (on android ndk maybe)
-    tests for various expr
+    more tests for various math/expr ops
 
     dupe getReg calls in g_rval
     share genlocal and atom.T_IDENT
@@ -54,13 +52,10 @@ NOTES: (mostly internal mumbling)
           straight line, so TOS doesn't mirror branching or bool ops. using
           stack means that the registers/vst aren't affected outside each arm
           of the or/and conditions.
-    not: just == 0 and back into reg
+    logical not: just == 0 and back into reg
     math functions, + - * / & | ^
-
-
-NOTES:
-
-    register usage:
+    unary ops
+    parens for precedence
 
 
 */
@@ -134,6 +129,7 @@ typedef struct Context {
 
 static Context C;
 static void suite();
+static void or_test();
 
 /*
  * misc utilities.
@@ -669,7 +665,13 @@ static int genlocal()
 
 static void atom()
 {
-    if (CURTOKt == T_NUM)
+    if (CURTOKt == '(')
+    {
+        NEXT();
+        or_test();
+        SKIP(')');
+    }
+    else if (CURTOKt == T_NUM)
     {
         i_const(CURTOK->data.tokn);
         NEXT();
