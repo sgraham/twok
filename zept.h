@@ -105,10 +105,15 @@ extern int zeptRun(char* code);
     #include <dlfcn.h>
     static void* zept_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { munmap(p, size); }
+    static void* zept_getExtern(char* name) { return dlsym(0, name); }
+    static int zept_CTZ(int x) { return __builtin_ctz(x); }
 #elif _WIN32
     #include <windows.h>
     static void* zept_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
+    static void* zept_getExtern(char* name) { return GetProcAddress(GetModuleHandle(NULL), name); }
+    #pragma intrinsic(_BitScanReverse)
+    static int zept_CTZ(int x) { unsigned long ret; _BitScanReverse(&ret, x); return ret; }
     #define strdup _strdup
 #endif
 
@@ -400,7 +405,7 @@ typedef struct NativeContext {
 } NativeContext;
 static NativeContext NC;
 
-#define vreg_to_enc(vr) __builtin_ctz(vr)
+#define vreg_to_enc(vr) zept_CTZ(vr)
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
@@ -562,7 +567,7 @@ static void i_func(Token* tok)
 static void i_extern(Token* tok)
 {
     /* note, tok->data.str is already interned */
-    void *p = dlsym(0, tok->data.str);
+    void *p = zept_getExtern(tok->data.str);
     if (!p) error("'%s' not found", tok->data.str);
     if (zvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
     zvpush(C.externnames, tok->data.str);
@@ -642,9 +647,9 @@ static void i_store()
 
 static void i_storelocal(int loc)
 {
-    int val = g_rval(V_REG_ANY);
+    int val = g_rval(V_REG_ANY), into;
     i_addr(loc, V_LOCAL);
-    int into = g_lval(V_REG_ANY & ~val);
+    into = g_lval(V_REG_ANY & ~val);
     ob(0x48); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }

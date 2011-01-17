@@ -6,7 +6,11 @@ char testdata[1<<24];
 char curtest[1<<24];
 char description[256];
 
+#if _WIN32
+__declspec(dllexport)
+#else
 __attribute__((externally_visible))
+#endif
 int XXXtest0(int a, int b) 
 {
     return a - b;
