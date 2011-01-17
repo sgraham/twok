@@ -19,16 +19,20 @@ void copyline(char** dest, char** src)
     }
 }
 
-/*#define VERBOSE*/
-
 int main(int argc, char** argv)
 {
-    int i = 0, ret, failCount = 0, passCount = 0, disabledCount = 0, failed;
+    int i = 0, ret, failCount = 0, passCount = 0, disabledCount = 0, failed, verbose = 0;
     int expectedRC;
     FILE* f = fopen("tests.zept", "rb");
     char* src = testdata;
     char* dest, *desc;
     ret = /* warning suppress */ (int)fread(src, 1, 1<<24, f);
+    if (argc >= 2 && strcmp(argv[1], "-v") == 0)
+    {
+        argc--;
+        argv++;
+        verbose = 1;
+    }
     for (;; ++i)
     {
         if (src[0] != '#' || src[1] != '#' || src[2] != '#')
@@ -65,14 +69,12 @@ int main(int argc, char** argv)
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
         passCount += !failed;
-#ifdef VERBOSE
-        /*if (failed)*/
+        if (failed || verbose)
         {
             printf("\n------------------------\n%s------------------------\n", curtest);
             printf("rc=%d, want=%d, desc='%s'\n%s%s\n\n", ret, expectedRC, description,
                     C.errorText[0] ? "Error:\n" : "", C.errorText);
         }
-#endif
     }
     return failCount;
 }
