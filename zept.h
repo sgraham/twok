@@ -20,6 +20,8 @@ ABOUT:
 
 TODO/NOTES:
 
+    parens for precedence
+    unary ops
     function call args
     lists
     C function calls and runtime lib
@@ -27,6 +29,7 @@ TODO/NOTES:
     @var and free func for manual memory
     uninit var tracking (make it optional?)
     arm backend (on android ndk maybe)
+    tests for various expr
 
     dupe getReg calls in g_rval
     share genlocal and atom.T_IDENT
@@ -53,8 +56,6 @@ NOTES: (mostly internal mumbling)
           of the or/and conditions.
     not: just == 0 and back into reg
     math functions, + - * / & | ^
-        - poorly tested so far
-        - no unary ops, no grouping ()s
 
 
 NOTES:
