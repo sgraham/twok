@@ -333,5 +333,13 @@ def __main__():
 def __main__():
     return (100 % 100
 
+### -1 got ')'
+def __main__():
+    )
+
+### 384 reg usage
+def __main__():
+    return ((1+1) * (2+2)) * ((3+3) * (4+4))
+
 ### 99999 END
 # vim: set ft=python:

@@ -57,6 +57,12 @@ NOTES: (mostly internal mumbling)
     unary ops
     parens for precedence
 
+    externs:
+        would be nice to dlsym externs automatically, but then we'd have to
+        scan the body of functions to know what was assigned to, rather than
+        just used. we could either do that, or require explicit 'extern blah'
+        declarations at global scope?
+
 
 */
 
@@ -228,7 +234,7 @@ static void error(char *fmt, ...)
  * tokenize. build a zv of Token's for rest. indent/dedent is a bit icky.
  */
 
-static char KWS[] = " if elif else or for def return mod and not print pass << >> <= >= == != ";
+static char KWS[] = " if elif else or for def return extern mod and not print pass << >> <= >= == != ";
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
 char* strintern(char* s)
 {
@@ -250,7 +256,7 @@ static void tokenize()
     char *pos = C.input, *startpos;
     int i, tok, column;
     int *indents = 0;
-    char *ident = 0;
+    char *ident = 0, *tempident = 0;
 
     zvpush(indents, 0);
 
@@ -304,9 +310,16 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
                     TOKN(T_NUM, strtol(ident, 0, 0));
                 else
                 {
+                    /* oops, need to search with space before/after so "i"
+                     * isn't found in "if" and "x" isn't found in "extern". */
+                    zvpush(tempident, ' ');
+                    for (i = 0; i < zvsize(ident); ++i) zvpush(tempident, ident[i]);
+                    zvpush(tempident, ' ');
+                    zvpush(tempident, 0);
                     tok = T_IDENT;
-                    if (strstr(KWS, ident)) tok = (int)(strstr(KWS, ident) - KWS + T_KW);
+                    if (strstr(KWS, tempident)) tok = (int)(strstr(KWS, tempident) + 1 /*space*/ - KWS + T_KW);
                     TOKI(tok, ident);
+                    tempident = zvfree(tempident);
                 }
             }
             else if (*pos == '#')
@@ -340,9 +353,27 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 /* x64 backend */
 #if defined(_M_X64) || defined(__amd64__)
 
+/* todo; add r8-r11? 0x48s need to change to 0x49 for that.
+ * currently used: rax, rcx, rdx, rsi, rdi; all volatile across calls.
+ * hmm. actually difficult to construct basic math ops that use more than 4
+ * regs anyway, so not worth it straight away. */
 enum { V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
-       V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RBX,
-       V_IMMED=0x0010, V_TEMP=0x0020, V_ADDR=0x0040, V_LOCAL=0x0080, V_GLOBAL=0x0100, };
+       V_REG_RSP=0x0010, V_REG_RBP=0x0020, V_REG_RSI=0x0040, V_REG_RDI=0x0080,
+       V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RSI | V_REG_RDI,
+       V_IMMED=0x0100, V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_GLOBAL=0x1000, };
+
+/* bah. asshats used different abis for x64. only support 4 args for now since
+ * windows only supports 4 w/o stack manip. */
+enum {
+#if __unix__ || (__APPLE__ && __MACH__)
+    FUN_ARG0 = V_REG_RDI,
+    FUN_ARG1 = V_REG_RSI,
+    FUN_ARG2 = V_REG_RDX,
+    FUN_ARG3 = V_REG_RCX,
+#elif _WIN32
+#endif
+};
+
 
 enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 
@@ -356,8 +387,7 @@ typedef struct NativeContext {
 } NativeContext;
 static NativeContext NC;
 
-static int RegCatToRegOffset[5] = { 0, 1, 2, -999, 3 };
-#define vreg_to_enc(vr) RegCatToRegOffset[((vr) >> 1)]
+#define vreg_to_enc(vr) __builtin_ctz(vr)
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
@@ -389,7 +419,7 @@ static int getReg(int valid)
     int i, j, reg;
 
     /* figure out if it's currently in use */
-    for (i = V_REG_RAX; i <= V_REG_RBX; i <<= 1)
+    for (i = V_REG_RAX; i <= V_REG_RDI; i <<= 1)
     {
         if ((i & valid) == 0) continue;
         for (j = 0; j < zvsize(C.vst); ++j)
@@ -879,14 +909,20 @@ static void suite()
 
 static void funcdef()
 {
-    SKIP(KW(def));
-    zvfree(C.locals);
-    i_func(CURTOK);
-    SKIP(T_IDENT);
-    SKIP('(');
-    SKIP(')');
-    suite();
-    i_endfunc();
+    if (CURTOKt == KW(extern))
+    {
+    }
+    else
+    {
+        SKIP(KW(def));
+        zvfree(C.locals);
+        i_func(CURTOK);
+        SKIP(T_IDENT);
+        SKIP('(');
+        SKIP(')');
+        suite();
+        i_endfunc();
+    }
 }
 
 static void fileinput()
