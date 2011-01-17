@@ -8,6 +8,9 @@ Before including,
 
 in *one* C file that you want to contain the implementation.
 
+On Linux/Mac you need to link with libdl.a too (sorry.) Normally, this means
+adding -ldl to the link command line somewhere.
+
 
 ABOUT:
 
@@ -58,10 +61,17 @@ NOTES: (mostly internal mumbling)
     parens for precedence
 
     externs:
-        would be nice to dlsym externs automatically, but then we'd have to
-        scan the body of functions to know what was assigned to, rather than
-        just used. we could either do that, or require explicit 'extern blah'
-        declarations at global scope?
+        - would be nice to dlsym externs automatically, but then we'd have to
+          scan the body of functions to know what was assigned to, rather than
+          just used.
+        - we could either do that, or require explicit 'extern blah'
+          declarations at global scope?
+        - can't just dlsym first because then whatever was imported into the C
+          program might override globals and locals of the program which would
+          be stupid.
+        - blech, dlsym sucks. can't get stuff from current elf unless you add
+          -rdynamic to the command line. can load from clib or other .so, but,
+          meh.
 
 
 */
@@ -92,6 +102,7 @@ extern int zeptRun(char* code);
 #include <ctype.h>
 #if __unix__ || (__APPLE__ && __MACH__)
     #include <sys/mman.h>
+    #include <dlfcn.h>
     static void* zept_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { munmap(p, size); }
 #elif _WIN32
@@ -111,10 +122,12 @@ typedef struct Token {
 
 typedef struct Value {
     union {
+        unsigned long _;
         int type;
         void (*handler)(struct Value*);
     } tag;
     union {
+        unsigned long _;
         int i;
         char* p;
     } data;
@@ -126,7 +139,7 @@ typedef struct Value {
 typedef struct Context {
     Token *tokens;
     int curtok, irpos;
-    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs;
+    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs;
     Value *instrs, *vst;
     jmp_buf errBuf;
     char errorText[512];
@@ -360,7 +373,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 enum { V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
        V_REG_RSP=0x0010, V_REG_RBP=0x0020, V_REG_RSI=0x0040, V_REG_RDI=0x0080,
        V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RSI | V_REG_RDI,
-       V_IMMED=0x0100, V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_GLOBAL=0x1000, };
+       V_IMMED=0x0100, V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_FUNC=0x1000 };
 
 /* bah. asshats used different abis for x64. only support 4 args for now since
  * windows only supports 4 w/o stack manip. */
@@ -486,10 +499,10 @@ static int g_rval(int valid)
         ob(0x48); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
         outnum32(-val * REG_SIZE - REG_SIZE);
     }
-    else if (tag & V_GLOBAL)
+    else if (tag & V_FUNC)
     {
         reg = getReg(valid);
-        ob(0x48); ob(0xb8); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
+        ob(0x48); ob(0xb8 + vreg_to_enc(reg)); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
     else if ((reg2 = (zvlast(C.vst).tag.type & V_REG_ANY)))
@@ -535,7 +548,7 @@ static int g_lval(int valid)
 }
 
 static void i_const(int v) { VAL(V_IMMED, v); }
-static void i_addr(int v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL or V_GLOBAL */
+static void i_addr(long v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL, V_FUNC, V_IMMED */
 static void i_func(Token* tok)
 {
     while (((unsigned long)C.codep) % 16 != 0) ob(0x90); /* nop to align */
@@ -545,6 +558,15 @@ static void i_func(Token* tok)
     ob(0x48); ob(0x81); ob(0xec); outnum32(0); /* sub rsp, xxx */
     NC.numlocsp = C.codep - 4; /* save for endfunc to patch */
     VAL(V_IMMED, 0); /* for fall off ret */
+}
+static void i_extern(Token* tok)
+{
+    /* note, tok->data.str is already interned */
+    void *p = dlsym(0, tok->data.str);
+    if (!p) error("'%s' not found", tok->data.str);
+    if (zvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
+    zvpush(C.externnames, tok->data.str);
+    zvpush(C.externaddrs, p);
 }
 
 static void i_ret() { g_rval(V_REG_RAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
@@ -708,7 +730,9 @@ static void atom()
     }
     else if (CURTOKt == T_IDENT)
     {
-        if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_GLOBAL);
+        int i;
+        if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_addr((unsigned long)C.externaddrs[i], V_IMMED);
+        else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
         else
         {
             char* name = strintern(CURTOK->data.str);
@@ -911,6 +935,10 @@ static void funcdef()
 {
     if (CURTOKt == KW(extern))
     {
+        SKIP(KW(extern));
+        i_extern(CURTOK);
+        NEXT();
+        SKIP(T_NL);
     }
     else
     {
@@ -982,6 +1010,7 @@ int zeptRun(char* code)
     for (i = 0; i < zvsize(C.strs); ++i) free(C.strs[i]);
     zvfree(C.strs);
     zvfree(C.funcnames); zvfree(C.funcaddrs);
+    zvfree(C.externnames); zvfree(C.externaddrs);
     zept_freeExec(C.codeseg, allocSize);
     return ret;
 }

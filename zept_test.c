@@ -6,6 +6,12 @@ char testdata[1<<24];
 char curtest[1<<24];
 char description[256];
 
+__attribute__((externally_visible))
+int XXXtest0(int a, int b) 
+{
+    return a - b;
+}
+
 void copyline(char** dest, char** src)
 {
     int done;
