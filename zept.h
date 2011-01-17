@@ -609,6 +609,16 @@ static void i_call(int argcount)
     ob(0xff); ob(0xd0); /* call rax */
 }
 
+static void i_mathunary(int op)
+{
+    int reg;
+    if (op == '+') return;
+    reg = g_rval(V_REG_ANY);
+    /* either neg or not */
+    ob(0x48); ob(0xf7); ob(op == '-' ? 0xd8 : 0xd0 + vreg_to_enc(reg));
+    VAL(reg, 0);
+}
+
 /* + - * / % & | ^ */
 static void i_math(int op)
 {
@@ -706,10 +716,10 @@ static void factor()
 {
     if (CURTOKt == '+' || CURTOKt == '-' || CURTOKt == '~')
     {
-        /*int op = CURTOKt;*/
+        int op = CURTOKt;
         NEXT();
         factor();
-        /*i_mathunary(op);*/
+        i_mathunary(op);
     }
     else
     {
@@ -717,7 +727,7 @@ static void factor()
     }
 }
 
-#define EXPRP(name, sub, math, tok0, tok1, tok2)                        \
+#define EXPRP(name, sub, tok0, tok1, tok2)                              \
 static void name()                                                      \
 {                                                                       \
     sub();                                                              \
@@ -726,14 +736,14 @@ static void name()                                                      \
         int op = CURTOKt;                                               \
         NEXT();                                                         \
         sub();                                                          \
-        math(op);                                                       \
+        i_math(op);                                                     \
     }                                                                   \
 }
-EXPRP(term, factor, i_math, '*', '/', '%')
-EXPRP(arith_expr, term, i_math, '+', '-', '-')
-EXPRP(and_expr, arith_expr, i_math, '&', '&', '&')
-EXPRP(xor_expr, and_expr, i_math, '^', '^', '^')
-EXPRP(expr, xor_expr, i_math, '|', '|', '|')
+EXPRP(term, factor, '*', '/', '%')
+EXPRP(arith_expr, term, '+', '-', '-')
+EXPRP(and_expr, arith_expr, '&', '&', '&')
+EXPRP(xor_expr, and_expr, '^', '^', '^')
+EXPRP(expr, xor_expr, '|', '|', '|')
 
 static void comparison()
 {
@@ -913,7 +923,7 @@ int zeptRun(char* code)
         C.codeseg = C.codep = zept_allocExec(allocSize);
         C.codesegend = C.codeseg + allocSize;
         fileinput();
-        //assert(zvsize(C.vst) == 0);
+        if (zvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
 #if 1
         { FILE* f = fopen("dump.dat", "wb");

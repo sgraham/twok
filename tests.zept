@@ -292,7 +292,7 @@ def __main__():
 def __main__():
     return 200 / 10
 
-### -20 DISABLED div 1
+### -20 div 1 neg
 # no unary - or grouping () yet!
 def __main__():
     return -200 / 10
@@ -300,6 +300,26 @@ def __main__():
 ### 20 mod 0
 def __main__():
     return 120 % 50
+
+### -20 mod 1
+def __main__():
+    return -120 % 50
+
+### 0 mod 2
+def __main__():
+    return -120 % 20
+
+### 255 not 0
+def __main__():
+    return ~0 & 255
+
+### -2 not 1
+def __main__():
+    return ~0 - 1
+
+### 123 unary +
+def __main__():
+    return +123
 
 ### 99999 END
 # vim: set ft=python:
