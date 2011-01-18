@@ -17,8 +17,6 @@ def __main__():
 ### -1 line 1, col 8
 def ab cd():
     return 33
-### -1 no entry point
-
 ### 0 blank lines
 def __main__():
     return 0
@@ -341,8 +339,7 @@ def __main__():
 def __main__():
     return ((1+1) * (2+2)) * ((3+3) * (4+4))
 
-### -5 DISABLED C ffi
-extern XXXtest0
+### -5 C ffi
 def __main__():
     return XXXtest0(2, 7)
 

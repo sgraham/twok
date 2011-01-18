@@ -83,7 +83,7 @@ NOTES: (mostly internal mumbling)
 extern "C" {
 #endif
 
-extern int zeptRun(char* code);
+extern int zeptRun(char *code, void *(*externLookup)(char *name));
 
 #ifdef __cplusplus
 }
@@ -105,13 +105,11 @@ extern int zeptRun(char* code);
     #include <dlfcn.h>
     static void* zept_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { munmap(p, size); }
-    static void* zept_getExtern(char* name) { return dlsym(0, name); }
     static int zept_CTZ(int x) { return __builtin_ctz(x); }
 #elif _WIN32
     #include <windows.h>
     static void* zept_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
-    static void* zept_getExtern(char* name) { return GetProcAddress(GetModuleHandle(NULL), name); }
     #pragma intrinsic(_BitScanReverse)
     static int zept_CTZ(int x) { unsigned long ret; _BitScanReverse(&ret, x); return ret; }
     #define strdup _strdup
@@ -145,6 +143,7 @@ typedef struct Context {
     Token *tokens;
     int curtok, irpos;
     char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs;
+    void *(*externLookup)(char *name);
     Value *instrs, *vst;
     jmp_buf errBuf;
     char errorText[512];
@@ -154,6 +153,7 @@ typedef struct Context {
 static Context C;
 static void suite();
 static void or_test();
+static int atomplus();
 
 /*
  * misc utilities.
@@ -567,7 +567,7 @@ static void i_func(Token* tok)
 static void i_extern(Token* tok)
 {
     /* note, tok->data.str is already interned */
-    void *p = zept_getExtern(tok->data.str);
+    void *p = 0;
     if (!p) error("'%s' not found", tok->data.str);
     if (zvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
     zvpush(C.externnames, tok->data.str);
@@ -720,18 +720,20 @@ static int genlocal()
     return zvindexof(C.locals, name);
 }
 
-static void atom()
+static int atom()
 {
     if (CURTOKt == '(')
     {
         NEXT();
         or_test();
         SKIP(')');
+        return 1;
     }
     else if (CURTOKt == T_NUM)
     {
         i_const(CURTOK->data.tokn);
         NEXT();
+        return 1;
     }
     else if (CURTOKt == T_IDENT)
     {
@@ -745,12 +747,20 @@ static void atom()
             i_addr(zvindexof(C.locals, name), V_LOCAL);
         }
         NEXT();
+        return 1;
     }
+    return 0;
 }
 
 static int arglist()
 {
-    return 0;
+    int count = atomplus();
+    while (count && CURTOKt == ',')
+    {
+        SKIP(',');
+        count += atomplus();
+    }
+    return count;
 }
 
 static int trailer()
@@ -767,10 +777,11 @@ static int trailer()
     return 0;
 }
 
-static void atomplus()
+static int atomplus()
 {
-    atom();
+    int ret = atom();
     while (trailer()) {}
+    return ret;
 }
 
 static void factor()
@@ -971,11 +982,12 @@ static void fileinput()
 /*
  * main api entry point
  */
-int zeptRun(char* code)
+int zeptRun(char *code, void *(*externLookup)(char *name))
 {
     int ret, allocSize, i, entryidx;
     memset(&C, 0, sizeof(C));
     C.input = code;
+    C.externLookup = externLookup;
     allocSize = 1<<17;
     if (setjmp(C.errBuf) == 0)
     {

@@ -74,7 +74,7 @@ int main(int argc, char** argv)
             continue;
         }
         printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
-        ret = zeptRun(curtest);
+        ret = zeptRun(curtest, 0);
         failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
