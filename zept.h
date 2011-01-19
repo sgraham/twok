@@ -23,7 +23,6 @@ ABOUT:
 
 TODO/NOTES:
 
-    function call args
     lists
     C function calls and runtime lib
     mempush/pop for 'gc'
@@ -73,6 +72,13 @@ NOTES: (mostly internal mumbling)
           -rdynamic to the command line. can load from clib or other .so, but,
           meh.
 
+    function call args
+        - follow the abi for the platform. x64 is unfortunately different
+        between microsoft and linux/osx (which follow amd's). they have a
+        different number of reg args and msft reserves spill locations for the
+        register args.
+        - we want to interop easily w/ C, so use this for internal functions
+        too.
 
 */
 
