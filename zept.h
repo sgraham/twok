@@ -8,13 +8,10 @@ Before including,
 
 in *one* C file that you want to contain the implementation.
 
-On Linux/Mac you need to link with libdl.a too (sorry.) Normally, this means
-adding -ldl to the link command line somewhere.
-
 
 ABOUT:
 
-    Native compile on x64, ARM (not yet), PPC (not yet), or interpreted
+    Native compile on x64, ARM (not yet), PPC (not yet), or interpreted for console
     < 1k LOC (`sloccount zept.h`)
     No external dependencies
 
