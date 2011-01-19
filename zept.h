@@ -578,7 +578,7 @@ static int g_rval(int valid)
     else if (tag & V_TEMP)
     {
         int reg = getReg(valid);
-        g_loadspill(reg, val);
+        g_loadspill(reg, (int)val);
     }
     else
     {
