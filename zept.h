@@ -379,7 +379,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 /* currently used: rax, rcx, rdx, rsi, rdi; all volatile across calls.
  * hmm. actually difficult to construct basic math ops that use more than 4
  * regs anyway, so not worth it straight away. */
-enum { V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_FUNC=0x1000, V_IMMED=0x2000,
+enum { V_TEMP=0x1000, V_ADDR=0x2000, V_LOCAL=0x4000, V_FUNC=0x8000, V_IMMED=0x10000,
        V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
        V_REG_RSP=0x0010, V_REG_RBP=0x0020, V_REG_RSI=0x0040, V_REG_RDI=0x0080,
        V_REG_R8=0x0100, V_REG_R9=0x0200, V_REG_R10=0x0400, V_REG_R11=0x0800,
@@ -664,11 +664,16 @@ static void i_storelocal(int loc)
 
 static void i_call(int argcount)
 {
-    int i, stackdelta = (argcount - zarrsize(funcArgs)) * 8;
+    int i, stackdelta = (argcount - zarrsize(funcArgs)) * 8, argnostack = 1;
+    if (stackdelta < 0) stackdelta = 0;
 #if _WIN32
     stackdelta += 32; /* shadow stack on msft */
+    argnostack = 0;
 #endif
-    lead(0); ob(0x81); ob(0xec); outnum32(stackdelta);
+    if (stackdelta > 0)
+    {
+        lead(0); ob(0x81); ob(0xec); outnum32(stackdelta);
+    }
 
     /* we have them in reverse order (pushed L->R), so reverse index */
     for (i = 0; i < argcount; ++i)
@@ -676,17 +681,20 @@ static void i_call(int argcount)
         int idx = argcount - i - 1;
         if (idx >= zarrsize(funcArgs))
         {
-            g_rval(V_REG_RAX);
-            /* mov [rsp+X], rax */
-            lead(0); ob(0x89); ob(0x44); ob(0x24); ob(idx*8);
+            g_rval(V_REG_R11);
+            /* mov [rsp+X], r11 */
+            ob(0x4c); ob(0x89); ob(0x5c); ob(0x24); ob((idx - zarrsize(funcArgs)*argnostack) * 8);
         }
         else g_rval(funcArgs[idx]);
     }
 
-    g_rval(V_REG_RAX);
-    ob(0xff); ob(0xd0); /* call rax */
+    g_rval(V_REG_R11); /* al is used for varargs on amd64 abi, r11 is volatile for both */
+    ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
 
-    lead(0); ob(0x81); ob(0xc4); outnum32(stackdelta); /* clean up */
+    if (stackdelta > 0)
+    {
+        lead(0); ob(0x81); ob(0xc4); outnum32(stackdelta); /* clean up */
+    }
 }
 
 static void i_mathunary(int op)
