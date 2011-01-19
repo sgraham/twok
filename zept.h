@@ -114,6 +114,7 @@ extern int zeptRun(char *code, void *(*externLookup)(char *name));
         #pragma intrinsic(_BitScanForward)
         static int zept_CTZ(int x) { unsigned long ret; _BitScanForward(&ret, x); return ret; }
         #define strdup _strdup
+        #define strtoll _strtoi64
     #endif
 #endif
 
@@ -121,7 +122,7 @@ typedef struct Token {
     int type, pos;
     union {
         char* str;
-        int tokn;
+        long long tokn;
     } data;
 } Token;
 
@@ -329,7 +330,7 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
                     zvpush(ident, *pos++);
                 zvpush(ident, 0);
                 if (isdigit(tok))
-                    TOKN(T_NUM, strtol(ident, 0, 0));
+                    TOKN(T_NUM, strtoll(ident, 0, 0));
                 else
                 {
                     /* oops, need to search with space before/after so "i"
@@ -386,13 +387,12 @@ enum { V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_FUNC=0x1000, V_IMMED=0x20
        V_REG_FIRST = V_REG_RAX, V_REG_LAST = V_REG_R11,
 };
 
-/* bah. asshats used different abis for x64. only support 4 args for now since
- * windows only supports 4 w/o stack manip. */
+/* bah. asshats used different abis for x64. */
 static int funcArgs[] = {
 #if __unix__ || (__APPLE__ && __MACH__)
-    V_REG_RDI, V_REG_RSI, V_REG_RDX, V_REG_RCX,
+    V_REG_RDI, V_REG_RSI, V_REG_RDX, V_REG_RCX, V_REG_R8, V_REG_R9
 #elif _WIN32
-    V_REG_RCX, V_REG_RDX, V_REG_R8, V_REG_R9,
+    V_REG_RCX, V_REG_RDX, V_REG_R8, V_REG_R9
 #endif
 };
 
@@ -664,18 +664,29 @@ static void i_storelocal(int loc)
 
 static void i_call(int argcount)
 {
-    int i;
-    if (argcount > zarrsize(funcArgs)) error("todo; too many args");
-    /* we have them in reverse order (pushed L->R), so reverse index */
-    for (i = 0; i < argcount; ++i) g_rval(funcArgs[argcount - i - 1]);
+    int i, stackdelta = (argcount - zarrsize(funcArgs)) * 8;
 #if _WIN32
-    lead(0); ob(0x81); ob(0xec); outnum32(32); /* shadow stack adjustment for msft x64 abi */
+    stackdelta += 32; /* shadow stack on msft */
 #endif
+    lead(0); ob(0x81); ob(0xec); outnum32(stackdelta);
+
+    /* we have them in reverse order (pushed L->R), so reverse index */
+    for (i = 0; i < argcount; ++i)
+    {
+        int idx = argcount - i - 1;
+        if (idx >= zarrsize(funcArgs))
+        {
+            g_rval(V_REG_RAX);
+            /* mov [rsp+X], rax */
+            lead(0); ob(0x89); ob(0x44); ob(0x24); ob(idx*8);
+        }
+        else g_rval(funcArgs[idx]);
+    }
+
     g_rval(V_REG_RAX);
     ob(0xff); ob(0xd0); /* call rax */
-#if _WIN32
-    lead(0); ob(0x81); ob(0xc4); outnum32(32); /* and remove shadow stack */
-#endif
+
+    lead(0); ob(0x81); ob(0xc4); outnum32(stackdelta); /* clean up */
 }
 
 static void i_mathunary(int op)

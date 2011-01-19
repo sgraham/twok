@@ -11,9 +11,29 @@ int XXXtest0(int a, int b)
     return a - b;
 }
 
+int XXXtest1(int a, int b, int c, int d)
+{
+    return 1000*a + 100*b + 10*c + d;
+}
+
+int XXXtest2(int a, int b, int c, int d, int e, int f, int g, int h)
+{
+    int tmp = XXXtest1(a,b,c,d);
+    int tmp2 = 10000*e + 100000*f + 1000000*g + 10000000*h;
+    return tmp+tmp2;
+}
+
+long long XXXtest3(long long a, long long b, long long c, long long d, long long e, long long f, long long g, long long h)
+{
+    return (h-a)+(g-b)+(f-c)+(e-d) + 1;
+}
+
 void* getExternFunc(char *name)
 {
     if (strcmp(name, "test0") == 0) return XXXtest0;
+    if (strcmp(name, "test1") == 0) return XXXtest1;
+    if (strcmp(name, "test2") == 0) return XXXtest2;
+    if (strcmp(name, "test3") == 0) return XXXtest3;
     return NULL;
 }
 
