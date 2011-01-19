@@ -75,7 +75,7 @@ NOTES: (mostly internal mumbling)
         different number of reg args and msft reserves spill locations for the
         register args.
         - we want to interop easily w/ C, so use this for internal functions
-        too.
+        too (unfortunately)
 
 */
 
@@ -801,6 +801,24 @@ static int arglist()
     return count;
 }
 
+static char** parameters()
+{
+    char **ret = 0;
+    if (CURTOKt == T_IDENT) 
+    {
+        zvpush(ret, CURTOK->data.str);
+        NEXT();
+    }
+    while (ret && CURTOKt == ',')
+    {
+        SKIP(',');
+        if (CURTOKt != T_IDENT) error("expecting parameter name");
+        zvpush(ret, CURTOK->data.str);
+        NEXT();
+    }
+    return ret;
+}
+
 static int trailer()
 {
     if (CURTOKt == '(')
@@ -996,11 +1014,13 @@ static void funcdef()
     }
     else
     {
+        char **argnames = 0;
         SKIP(KW(def));
         zvfree(C.locals);
         i_func(CURTOK);
         SKIP(T_IDENT);
         SKIP('(');
+        argnames = parameters();
         SKIP(')');
         suite();
         i_endfunc();
@@ -1046,7 +1066,7 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
         fileinput();
         if (zvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
