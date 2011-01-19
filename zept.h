@@ -476,12 +476,19 @@ static void addfunc(char* name, char* addr)
 static int funcidx(char* name) { char* p = strintern(name); return zvindexof(C.funcnames, p); }
 
 /* store the given register (offset) into the given stack slot */
-static void g_store(int reg, int slot)
+static void g_storespill(int reg, int slot)
 {
-    (void)reg;
-    (void)slot;
-    error("todo; spill");
+    lead(reg); ob(0x89); ob(0x85 + vreg_to_enc(reg));
+    outnum32((-1 - slot - zvsize(NC.paramnames) - zvsize(C.locals)) * REG_SIZE);
 }
+
+/* load spill # slot into reg */
+static void g_loadspill(int reg, int slot)
+{
+    lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg));
+    outnum32((-1 - slot - zvsize(NC.paramnames) - zvsize(C.locals)) * REG_SIZE);
+}
+
 
 static int getReg(int valid)
 {
@@ -510,7 +517,7 @@ static int getReg(int valid)
 
             /* and send it there and update the flags */
             reg = C.vst[j].tag.type & valid;
-            g_store(reg, i);
+            g_storespill(reg, i);
             NC.spills[i] = 1;
             C.vst[j].tag.type &= ~V_REG_ANY;
             C.vst[j].tag.type |= V_TEMP;
@@ -561,12 +568,17 @@ static int g_rval(int valid)
         reg = getReg(valid);
         lead(reg); ob(0xb8 + vreg_to_enc(reg)); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
-    else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
-    else if ((reg2 = (zvlast(C.vst).tag.type & V_REG_ANY)))
+    else if ((reg = (tag & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
+    else if ((reg2 = (tag & V_REG_ANY)))
     {
         /* in a register, but not the one we need */
         int reg = getReg(valid);
         lead2(reg, reg2); ob(0x89); ob(0xc0 + vreg_to_enc(reg) + vreg_to_enc(reg2) * 8); /* mov rXx, rXx */
+    }
+    else if (tag & V_TEMP)
+    {
+        int reg = getReg(valid);
+        g_loadspill(reg, val);
     }
     else
     {
@@ -1132,7 +1144,7 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
         fileinput();
         if (zvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
