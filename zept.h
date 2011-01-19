@@ -14,7 +14,7 @@ adding -ldl to the link command line somewhere.
 
 ABOUT:
 
-    Native compile on x64, ARM (not yet), or interpreted
+    Native compile on x64, ARM (not yet), PPC (not yet), or interpreted
     < 1k LOC (`sloccount zept.h`)
     No external dependencies
 
@@ -102,17 +102,19 @@ extern int zeptRun(char *code, void *(*externLookup)(char *name));
 #include <ctype.h>
 #if __unix__ || (__APPLE__ && __MACH__)
     #include <sys/mman.h>
-    #include <dlfcn.h>
     static void* zept_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
     static void zept_freeExec(void* p, int size) { munmap(p, size); }
     static int zept_CTZ(int x) { return __builtin_ctz(x); }
 #elif _WIN32
-    #include <windows.h>
-    static void* zept_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
-    static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
-    #pragma intrinsic(_BitScanReverse)
-    static int zept_CTZ(int x) { unsigned long ret; _BitScanReverse(&ret, x); return ret; }
-    #define strdup _strdup
+    #if _M_PPC
+    #else
+        #include <windows.h>
+        static void* zept_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
+        static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
+        #pragma intrinsic(_BitScanForward)
+        static int zept_CTZ(int x) { unsigned long ret; _BitScanForward(&ret, x); return ret; }
+        #define strdup _strdup
+    #endif
 #endif
 
 typedef struct Token {
@@ -125,19 +127,21 @@ typedef struct Token {
 
 typedef struct Value {
     union {
-        unsigned long _;
+        unsigned long long _;
         int type;
         void (*handler)(struct Value*);
     } tag;
     union {
-        unsigned long _;
+        unsigned long long _;
         int i;
+        long long l;
         char* p;
     } data;
     int label;
 } Value;
 #define VAL(t, d) do { Value _ = { { (t) }, { (d) }, 0xbad1abe1 }; zvpush(C.vst, _); } while(0)
 #define J_UNCOND 2
+#define zarrsize(a) ((int)(sizeof(a)/sizeof((a)[0])))
 
 typedef struct Context {
     Token *tokens;
@@ -371,24 +375,24 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
 /* x64 backend */
 #if defined(_M_X64) || defined(__amd64__)
 
-/* todo; add r8-r11? 0x48s need to change to 0x49 for that.
- * currently used: rax, rcx, rdx, rsi, rdi; all volatile across calls.
+/* currently used: rax, rcx, rdx, rsi, rdi; all volatile across calls.
  * hmm. actually difficult to construct basic math ops that use more than 4
  * regs anyway, so not worth it straight away. */
-enum { V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
+enum { V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_FUNC=0x1000, V_IMMED=0x2000,
+       V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
        V_REG_RSP=0x0010, V_REG_RBP=0x0020, V_REG_RSI=0x0040, V_REG_RDI=0x0080,
-       V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_RSI | V_REG_RDI,
-       V_IMMED=0x0100, V_TEMP=0x0200, V_ADDR=0x0400, V_LOCAL=0x0800, V_FUNC=0x1000 };
+       V_REG_R8=0x0100, V_REG_R9=0x0200, V_REG_R10=0x0400, V_REG_R11=0x0800,
+       V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_R8 | V_REG_R9, /* all volatile for all abis */
+       V_REG_FIRST = V_REG_RAX, V_REG_LAST = V_REG_R11,
+};
 
 /* bah. asshats used different abis for x64. only support 4 args for now since
  * windows only supports 4 w/o stack manip. */
-enum {
+static int funcArgs[] = {
 #if __unix__ || (__APPLE__ && __MACH__)
-    FUN_ARG0 = V_REG_RDI,
-    FUN_ARG1 = V_REG_RSI,
-    FUN_ARG2 = V_REG_RDX,
-    FUN_ARG3 = V_REG_RCX,
+    V_REG_RDI, V_REG_RSI, V_REG_RDX, V_REG_RCX,
 #elif _WIN32
+    V_REG_RCX, V_REG_RDX, V_REG_R8, V_REG_R9,
 #endif
 };
 
@@ -396,8 +400,10 @@ enum {
 enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 
 #define ob(b) (*C.codep++ = (b))
+#define lead(r) ob(0x48 | ((r>=V_REG_R8)?1:0))
+#define lead2(r1,r2) ob(0x48 | ((r1>=V_REG_R8)?1:0) | ((r2>=V_REG_R8)?4:0))
 #define outnum32(n) { unsigned int _ = (unsigned int)(n); unsigned int mask = 0xff; unsigned int sh = 0; int i; for (i = 0; i < 4; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
-#define outnum64(n) { unsigned long _ = (unsigned long)(n); unsigned long mask = 0xff; unsigned long sh = 0; int i; for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
+#define outnum64(n) { unsigned long long _ = (unsigned long long)(n); unsigned long long mask = 0xff; unsigned long long sh = 0; int i; for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
     int spills[64]; /* is the Nth spill location in use? */
@@ -405,12 +411,12 @@ typedef struct NativeContext {
 } NativeContext;
 static NativeContext NC;
 
-#define vreg_to_enc(vr) zept_CTZ(vr)
+#define vreg_to_enc(vr) (((vr) >= V_REG_R8) ? zept_CTZ(((vr)>>8)) : zept_CTZ(vr))
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
 
-static char* functhunkaddr(int idx) { return C.codesegend - (idx + 1) * FUNC_THUNK_SIZE; }
+static char* functhunkaddr(long long idx) { return C.codesegend - (idx + 1) * FUNC_THUNK_SIZE; }
 static void addfunc(char* name, char* addr)
 {
     char* p;
@@ -437,7 +443,7 @@ static int getReg(int valid)
     int i, j, reg;
 
     /* figure out if it's currently in use */
-    for (i = V_REG_RAX; i <= V_REG_RDI; i <<= 1)
+    for (i = V_REG_FIRST; i <= V_REG_LAST; i <<= 1)
     {
         if ((i & valid) == 0) continue;
         for (j = 0; j < zvsize(C.vst); ++j)
@@ -454,7 +460,7 @@ static int getReg(int valid)
         if ((C.vst[j].tag.type & valid))
         {
             /* and a location to spill it to */
-            for (i = 0; i < (int)(sizeof(NC.spills)/sizeof(NC.spills[0])); ++i)
+            for (i = 0; i < zarrsize(NC.spills); ++i)
                 if (!NC.spills[i]) break;
 
             /* and send it there and update the flags */
@@ -475,24 +481,25 @@ static int getReg(int valid)
 
 static int g_rval(int valid)
 {
-    int reg, reg2, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
+    int reg, reg2, tag = zvlast(C.vst).tag.type;
+    long long val = zvlast(C.vst).data.l;
     if (tag & V_IMMED)
     {
         if (tag & V_ADDR)
         {
             /* mov Reg, const */
             reg = getReg(valid);
-            ob(0x48); ob(0xb8 + vreg_to_enc(reg));
+            lead(reg); ob(0xb8 + vreg_to_enc(reg));
             outnum64(val);
             /* mov [Reg], Reg */
-            ob(0x48); ob(0x89);
+            lead2(reg, reg); ob(0x89);
             ob(vreg_to_enc(reg) + vreg_to_enc(reg) * 8);
         }
         else
         {
             /* mov Reg, const */
             reg = getReg(valid);
-            ob(0x48); ob(0xb8 + vreg_to_enc(reg));
+            lead(reg); ob(0xb8 + vreg_to_enc(reg));
             outnum64(val);
         }
     }
@@ -501,20 +508,20 @@ static int g_rval(int valid)
         /* todo; uninit var; keep shadow stack of initialized flags, error on
          * read before write. need to figure out calling C lib */
         reg = getReg(valid);
-        ob(0x48); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
+        lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
         outnum32(-val * REG_SIZE - REG_SIZE);
     }
     else if (tag & V_FUNC)
     {
         reg = getReg(valid);
-        ob(0x48); ob(0xb8 + vreg_to_enc(reg)); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
+        lead(reg); ob(0xb8 + vreg_to_enc(reg)); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
     else if ((reg = (zvlast(C.vst).tag.type & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
     else if ((reg2 = (zvlast(C.vst).tag.type & V_REG_ANY)))
     {
         /* in a register, but not the one we need */
         int reg = getReg(valid);
-        ob(0x48); ob(0x89); ob(0xc0 + vreg_to_enc(reg) + vreg_to_enc(reg2) * 8); /* mov rXx, rXx */
+        lead2(reg, reg2); ob(0x89); ob(0xc0 + vreg_to_enc(reg) + vreg_to_enc(reg2) * 8); /* mov rXx, rXx */
     }
     else
     {
@@ -526,7 +533,8 @@ static int g_rval(int valid)
 
 static int g_lval(int valid)
 {
-    int reg = 0, tag = zvlast(C.vst).tag.type, val = zvlast(C.vst).data.i;
+    int reg = 0, tag = zvlast(C.vst).tag.type;
+    long long val = zvlast(C.vst).data.l;
     if (tag & V_ADDR)
     {
         if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
@@ -534,13 +542,13 @@ static int g_lval(int valid)
         {
             /* mov Reg, const */
             reg = getReg(valid);
-            ob(0x48); ob(0xb8 + vreg_to_enc(reg));
+            lead(reg); ob(0xb8 + vreg_to_enc(reg));
             outnum64(val);
         }
         else if (tag & V_LOCAL)
         {
             reg = getReg(valid);
-            ob(0x48); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
+            lead(reg); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
             outnum32(-val * REG_SIZE - REG_SIZE);
         }
     }
@@ -552,22 +560,22 @@ static int g_lval(int valid)
     return reg;
 }
 
-static void i_const(int v) { VAL(V_IMMED, v); }
-static void i_addr(long v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL, V_FUNC, V_IMMED */
+static void i_const(long long v) { VAL(V_IMMED, v); }
+static void i_addr(long long v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL, V_FUNC, V_IMMED */
 static void i_func(Token* tok)
 {
     while (((unsigned long)C.codep) % 16 != 0) ob(0x90); /* nop to align */
     addfunc(tok->data.str, C.codep);
     ob(0x55); /* push rbp */
-    ob(0x48); ob(0x89); ob(0xe5); /* mov rbp, rsp */
-    ob(0x48); ob(0x81); ob(0xec); outnum32(0); /* sub rsp, xxx */
+    lead(0); ob(0x89); ob(0xe5); /* mov rbp, rsp */
+    lead(0); ob(0x81); ob(0xec); outnum32(0); /* sub rsp, xxx */
     NC.numlocsp = C.codep - 4; /* save for endfunc to patch */
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 static void i_extern(Token* tok)
 {
     /* note, tok->data.str is already interned */
-    void *p = 0;
+    void *p = C.externLookup(tok->data.str);
     if (!p) error("'%s' not found", tok->data.str);
     if (zvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
     zvpush(C.externnames, tok->data.str);
@@ -594,9 +602,9 @@ static void i_cmp(int op)
     };
     a = g_rval(V_REG_RAX);
     into = g_rval(V_REG_ANY & ~a);
-    ob(0x48); ob(0x39 + vreg_to_enc(a)); ob(0xc0 + vreg_to_enc(into)); /* cmp eXx, eax */
+    lead(into); ob(0x39 + vreg_to_enc(a)); ob(0xc0 + vreg_to_enc(into)); /* cmp rXx, rax */
 
-    ob(0x48); ob(0xb8 + vreg_to_enc(into));
+    lead(into); ob(0xb8 + vreg_to_enc(into));
     outnum64(0);
     ob(0x0f);
     ob(0x90 + cmpccs[zvindexofnp(cmpccs, op, 6, 1)].cc);
@@ -618,7 +626,7 @@ static char* i_jmpc(int cond, char* prev)
     else
     {
         int reg = g_rval(V_REG_ANY);
-        ob(0x48); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
+        lead2(reg, reg); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
         outnum32(prev ? prev - C.codeseg : 0);
     }
@@ -641,7 +649,7 @@ static void i_store()
 {
     int val = g_rval(V_REG_ANY);
     int into = g_lval(V_REG_ANY & ~val);
-    ob(0x48); ob(0x89);
+    lead2(val, into); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
@@ -650,16 +658,24 @@ static void i_storelocal(int loc)
     int val = g_rval(V_REG_ANY), into;
     i_addr(loc, V_LOCAL);
     into = g_lval(V_REG_ANY & ~val);
-    ob(0x48); ob(0x89);
+    lead2(into, val); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
 static void i_call(int argcount)
 {
-    /* todo; push args */
-    (void)argcount;
+    int i;
+    if (argcount > zarrsize(funcArgs)) error("todo; too many args");
+    /* we have them in reverse order (pushed L->R), so reverse index */
+    for (i = 0; i < argcount; ++i) g_rval(funcArgs[argcount - i - 1]);
+#if _WIN32
+    lead(0); ob(0x81); ob(0xec); outnum32(32); /* shadow stack adjustment for msft x64 abi */
+#endif
     g_rval(V_REG_RAX);
     ob(0xff); ob(0xd0); /* call rax */
+#if _WIN32
+    lead(0); ob(0x81); ob(0xc4); outnum32(32); /* and remove shadow stack */
+#endif
 }
 
 static void i_mathunary(int op)
@@ -668,7 +684,7 @@ static void i_mathunary(int op)
     if (op == '+') return;
     reg = g_rval(V_REG_ANY);
     /* either neg or not */
-    ob(0x48); ob(0xf7); ob(op == '-' ? 0xd8 : 0xd0 + vreg_to_enc(reg));
+    lead(reg); ob(0xf7); ob(op == '-' ? 0xd8 : 0xd0 + vreg_to_enc(reg));
     VAL(reg, 0);
 }
 
@@ -687,7 +703,7 @@ static void i_math(int op)
     {
         int v1 = g_rval(V_REG_ANY);
         int v0 = g_rval(V_REG_ANY & ~v1);
-        ob(0x48); ob(map[opi].opc);
+        lead2(v0, v1); ob(map[opi].opc);
         if (op == '*') ob(0xaf);
         ob(0xc0 + vreg_to_enc(v0) + vreg_to_enc(v1) * 8);
         VAL(op == '*' ? v1 : v0, 0); /* bleh, extended imul args backwards? */
@@ -696,8 +712,8 @@ static void i_math(int op)
     {
         int v1 = g_rval(V_REG_ANY & ~(V_REG_RAX | V_REG_RDX));
         g_rval(V_REG_RAX);
-        ob(0x48); ob(0x99); /* cqo (sign extend rax into rdx) */
-        ob(0x48); ob(0xf7); ob(0xf8 + vreg_to_enc(v1)); /* idiv rXx */
+        lead(V_REG_RAX); ob(0x99); /* cqo (sign extend rax into rdx) */
+        lead(v1); ob(0xf7); ob(0xf8 + vreg_to_enc(v1)); /* idiv rXx */
         VAL(op == '/' ? V_REG_RAX : V_REG_RDX, 0); /* quotient in A, remainder in D */
     }
 }
@@ -738,7 +754,7 @@ static int atom()
     else if (CURTOKt == T_IDENT)
     {
         int i;
-        if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_addr((unsigned long)C.externaddrs[i], V_IMMED);
+        if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
         else
         {
@@ -772,7 +788,7 @@ static int trailer()
         count = arglist();
         SKIP(')');
         i_call(count);
-        VAL(V_REG_RAX, -999); /* ret */
+        VAL(V_REG_RAX, 0); /* ret */
     }
     return 0;
 }

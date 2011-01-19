@@ -340,8 +340,9 @@ def __main__():
     return ((1+1) * (2+2)) * ((3+3) * (4+4))
 
 ### -5 C ffi
+extern test0
 def __main__():
-    return XXXtest0(2, 7)
+    return test0(2, 7)
 
 ### 99999 END
 # vim: set ft=python:
