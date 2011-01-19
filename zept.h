@@ -77,6 +77,47 @@ NOTES: (mostly internal mumbling)
         - we want to interop easily w/ C, so use this for internal functions
         too (unfortunately)
 
+    stack layout on x64, each is REG_SIZE(=8) big
+
+        higher numbers
+        +-------------------------
+        | extra (non-reg) arg 3
+        +-------------------------
+        | extra arg 2
+        +-------------------------
+        | extra arg 1
+        +-------------------------
+        | extra arg 0
+        +-------------------------
+        | return addr 
+        +-------------------------
+        | prev rbp         <-- RBP
+        +-------------------------
+        | linear arg copies
+        | ...
+        +-------------------------
+        | locals/spills
+        | ...
+        +-------------------------
+        lower numbers
+
+        so,
+        locals are rbp-8, -16, -24, ...
+        extra args are rbp+8, +16, +24, ...
+
+        for simplicity, on entry to function, we extend rsp and copy args into
+        linear place to lookup. first 4 to 6 are in registers depending on abi.
+        so,
+        - rbp-8 is arg 0
+        - rbp-16 is arg 1
+        - rbp-24 is arg 2
+        ...
+        and,
+        - rbp-N is local 0
+        - rbp-N+8 is local 1
+        ...
+    
+
 */
 
 #ifndef INCLUDED_ZEPT_H
@@ -391,7 +432,7 @@ enum { V_TEMP=0x1000, V_ADDR=0x2000, V_LOCAL=0x4000, V_FUNC=0x8000, V_IMMED=0x10
 };
 
 /* bah. asshats used different abis for x64. */
-static int funcArgs[] = {
+static int funcArgRegs[] = {
 #if __unix__ || (__APPLE__ && __MACH__)
     V_REG_RDI, V_REG_RSI, V_REG_RDX, V_REG_RCX, V_REG_R8, V_REG_R9
 #elif _WIN32
@@ -410,7 +451,8 @@ enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 
 typedef struct NativeContext {
     int spills[64]; /* is the Nth spill location in use? */
-    char* numlocsp;
+    char *numlocsp;
+    char **paramnames;
 } NativeContext;
 static NativeContext NC;
 
@@ -511,8 +553,8 @@ static int g_rval(int valid)
         /* todo; uninit var; keep shadow stack of initialized flags, error on
          * read before write. need to figure out calling C lib */
         reg = getReg(valid);
-        lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 4); /* mov rXx, [rbp - xxx] (long form) */
-        outnum32(-val * REG_SIZE - REG_SIZE);
+        lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 8); /* mov rXx, [rbp + xxx] (long form) */
+        outnum32(val * REG_SIZE);
     }
     else if (tag & V_FUNC)
     {
@@ -552,7 +594,7 @@ static int g_lval(int valid)
         {
             reg = getReg(valid);
             lead(reg); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
-            outnum32(-val * REG_SIZE - REG_SIZE);
+            outnum32(val * REG_SIZE);
         }
     }
     else
@@ -565,14 +607,33 @@ static int g_lval(int valid)
 
 static void i_const(long long v) { VAL(V_IMMED, v); }
 static void i_addr(long long v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL, V_FUNC, V_IMMED */
-static void i_func(Token* tok)
+static void i_func(char *name, char **paramnames)
 {
+    int i;
     while (((unsigned long)C.codep) % 16 != 0) ob(0x90); /* nop to align */
-    addfunc(tok->data.str, C.codep);
+    addfunc(name, C.codep);
     ob(0x55); /* push rbp */
     lead(0); ob(0x89); ob(0xe5); /* mov rbp, rsp */
     lead(0); ob(0x81); ob(0xec); outnum32(0); /* sub rsp, xxx */
     NC.numlocsp = C.codep - 4; /* save for endfunc to patch */
+    NC.paramnames = paramnames;
+    /* copy args to shadow location, we put them in "upside down" from how
+     * they are on the arg stack */
+    for (i = 0; i < zvsize(paramnames); ++i)
+    {
+        /* get either from reg, or from stack, depending on index and abi */
+        if (i >= zarrsize(funcArgRegs))
+        {
+            ob(0x48); ob(0x8b); ob(0x85); outnum32(16+8*i); /* mov rax, [rbp + argoffset] */
+        }
+        else
+        {
+            int reg = funcArgRegs[i];
+            lead2(V_REG_RAX, reg); ob(0x89); ob(0xc0 + vreg_to_enc(V_REG_RAX) + vreg_to_enc(reg) * 8); /* mov rXx, rXx */
+        }
+        /* copy into local location */
+        ob(0x48); ob(0x89); ob(0x85); outnum32(-8 - 8*i);   /* mov [rbp - copyoffset], rax */
+    }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 static void i_extern(Token* tok)
@@ -659,15 +720,18 @@ static void i_store()
 static void i_storelocal(int loc)
 {
     int val = g_rval(V_REG_ANY), into;
-    i_addr(loc, V_LOCAL);
+    i_addr(-loc - zvsize(NC.paramnames) - 1, V_LOCAL);
     into = g_lval(V_REG_ANY & ~val);
     lead2(into, val); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
+static void i_addrparam(int loc) { i_addr(-loc - 1, V_LOCAL); }
+static void i_addrlocal(int loc) { i_addr(-loc - zvsize(NC.paramnames) - 1, V_LOCAL); }
+
 static void i_call(int argcount)
 {
-    int i, stackdelta = (argcount - zarrsize(funcArgs)) * 8, argnostack = 1;
+    int i, stackdelta = (argcount - zarrsize(funcArgRegs)) * 8, argnostack = 1;
     if (stackdelta < 0) stackdelta = 0;
 #if _WIN32
     stackdelta += 32; /* shadow stack on msft */
@@ -682,13 +746,13 @@ static void i_call(int argcount)
     for (i = 0; i < argcount; ++i)
     {
         int idx = argcount - i - 1;
-        if (idx >= zarrsize(funcArgs))
+        if (idx >= zarrsize(funcArgRegs))
         {
             g_rval(V_REG_R11);
             /* mov [rsp+X], r11 */
-            ob(0x4c); ob(0x89); ob(0x5c); ob(0x24); ob((idx - zarrsize(funcArgs)*argnostack) * 8);
+            ob(0x4c); ob(0x89); ob(0x5c); ob(0x24); ob((idx - zarrsize(funcArgRegs)*argnostack) * 8);
         }
-        else g_rval(funcArgs[idx]);
+        else g_rval(funcArgRegs[idx]);
     }
 
     g_rval(V_REG_R11); /* al is used for varargs on amd64 abi, r11 is volatile for both */
@@ -776,13 +840,13 @@ static int atom()
     else if (CURTOKt == T_IDENT)
     {
         int i;
-        if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
+        if ((i = zvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i);
+        else if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
         else
         {
-            char* name = strintern(CURTOK->data.str);
-            if (!zvcontains(C.locals, name)) zvpush(C.locals, name);
-            i_addr(zvindexof(C.locals, name), V_LOCAL);
+            if (!zvcontains(C.locals, CURTOK->data.str)) zvpush(C.locals, CURTOK->data.str);
+            i_addrlocal(zvindexof(C.locals, CURTOK->data.str));
         }
         NEXT();
         return 1;
@@ -911,14 +975,14 @@ static void name()                              \
         for (;;)                                \
         {                                       \
             i_storelocal(tmp);                  \
-            i_addr(tmp, V_LOCAL);               \
+            i_addrlocal(tmp);                   \
             label = i_jmpc(cond, label);        \
             if (done) break;                    \
             SKIP(KW(kw));                       \
             sub();                              \
             done = CURTOKt != KW(kw);           \
         }                                       \
-        i_addr(tmp, V_LOCAL);                   \
+        i_addrlocal(tmp);                       \
     }                                           \
     i_label(label);                             \
 }
@@ -1014,16 +1078,18 @@ static void funcdef()
     }
     else
     {
-        char **argnames = 0;
+        char **argnames, *fname;
         SKIP(KW(def));
         zvfree(C.locals);
-        i_func(CURTOK);
+        fname = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
         argnames = parameters();
+        i_func(fname, argnames);
         SKIP(')');
         suite();
         i_endfunc();
+        zvfree(argnames);
     }
 }
 
@@ -1066,7 +1132,7 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
         fileinput();
         if (zvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
