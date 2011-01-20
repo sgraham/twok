@@ -21,6 +21,15 @@ ABOUT:
 TODO/NOTES:
 
     lists
+        - first usage in a function should be @blah (in args, or first
+          assignment to local)
+        - becomes pointer for rest of function, and can be used without @:
+
+            @L = []
+            push(L, 4)
+            push(L, 3)
+            x = pop(L)
+
     C function calls and runtime lib
     mempush/pop for 'gc'
     @var and free func for manual memory
@@ -191,7 +200,7 @@ typedef struct Value {
 typedef struct Context {
     Token *tokens;
     int curtok, irpos;
-    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs;
+    char *input, *codeseg, *codesegend, *codep, **strs, **locals, *localisptr, **funcnames, **funcaddrs, **externnames, **externaddrs;
     void *(*externLookup)(char *name);
     Value *instrs, *vst;
     jmp_buf errBuf;
@@ -830,7 +839,7 @@ static int genlocal()
     char buf[128], *name;
     sprintf(buf, "$loc%d", count++);
     name = strintern(buf);
-    if (!zvcontains(C.locals, name)) zvpush(C.locals, name);
+    if (!zvcontains(C.locals, name)) { zvpush(C.locals, name); zvpush(C.localisptr, 0); }
     return zvindexof(C.locals, name);
 }
 
@@ -849,15 +858,24 @@ static int atom()
         NEXT();
         return 1;
     }
-    else if (CURTOKt == T_IDENT)
+    else if (CURTOKt == '@' || CURTOKt == T_IDENT)
     {
-        int i;
+        int i, isptr = 0;
+        if (CURTOKt == '@')
+        {
+            isptr = 1;
+            NEXT();
+        }
         if ((i = zvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i);
         else if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
         else
         {
-            if (!zvcontains(C.locals, CURTOK->data.str)) zvpush(C.locals, CURTOK->data.str);
+            if (!zvcontains(C.locals, CURTOK->data.str))
+            {
+                zvpush(C.locals, CURTOK->data.str);
+                zvpush(C.localisptr, isptr);
+            }
             i_addrlocal(zvindexof(C.locals, CURTOK->data.str));
         }
         NEXT();
@@ -1093,6 +1111,7 @@ static void funcdef()
         char **argnames, *fname;
         SKIP(KW(def));
         zvfree(C.locals);
+        zvfree(C.localisptr);
         fname = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
@@ -1160,6 +1179,7 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
     zvfree(C.vst);
     zvfree(C.instrs);
     zvfree(C.locals);
+    zvfree(C.localisptr);
     for (i = 0; i < zvsize(C.strs); ++i) free(C.strs[i]);
     zvfree(C.strs);
     zvfree(C.funcnames); zvfree(C.funcaddrs);
