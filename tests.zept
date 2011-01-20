@@ -371,5 +371,14 @@ def stuff(x, y):
 def __main__():
     return stuff(10, 100)
 
+### 0 DISABLED lists
+def __main__():
+    @L = []
+    push(L, 3)
+    push(L, 4)
+    x = pop(L)
+    L[14]
+
+
 ### 99999 END
 # vim: set ft=python:
