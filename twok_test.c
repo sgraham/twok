@@ -1,5 +1,5 @@
-#define ZEPT_DEFINE_IMPLEMENTATION
-#include "zept.h"
+#define TWOK_DEFINE_IMPLEMENTATION
+#include "twok.h"
 #include <stdio.h>
 
 char testdata[1<<24];
@@ -54,7 +54,7 @@ int main(int argc, char** argv)
 {
     int i = 0, ret, failCount = 0, passCount = 0, disabledCount = 0, failed, verbose = 0;
     int expectedRC;
-    FILE* f = fopen("tests.zept", "rb");
+    FILE* f = fopen("tests.twok", "rb");
     char* src = testdata;
     char* dest, *desc;
     ret = /* warning suppress */ (int)fread(src, 1, 1<<24, f);
@@ -95,7 +95,7 @@ int main(int argc, char** argv)
             continue;
         }
         printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
-        ret = zeptRun(curtest, getExternFunc);
+        ret = twokRun(curtest, getExternFunc);
         failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
         printf("%s\n", failed ? "FAILED": "ok");
         failCount += failed;

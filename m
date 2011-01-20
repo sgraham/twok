@@ -1,5 +1,5 @@
 #!/bin/bash
 clear
-gcc -std=gnu89 -g -O0 -Wall -Wextra -Werror zept_test.c zept_test2.c -o zept_test && \
-valgrind --quiet --leak-check=full ./zept_test $* && \
-sloccount --duplicates zept.h | awk '/Total Physical/ {print "LOC: " $NF}'
+gcc -std=gnu89 -g -O0 -Wall -Wextra -Werror twok_test.c twok_test2.c -o twok_test && \
+valgrind --quiet --leak-check=full ./twok_test $* && \
+sloccount --duplicates twok.h | awk '/Total Physical/ {print "LOC: " $NF}'
