@@ -1,6 +1,11 @@
-/* twok-0.10 - public domain, python-ish script lang - http://h4ck3r.net/#twok
+/* twok-0.10
+   public domain
+   python-ish native compiling scripting language
+   http://h4ck3r.net/#twok
+
    Scott Graham 2011 <scott.twok@h4ck3r.net>
-                                    No warranty implied; use at your own risk.
+   No warranty implied; use at your own risk.
+
 
 Before including,
 
@@ -17,7 +22,7 @@ ABOUT:
     ("twok" is a reference to the lines of code for the implementation)
 
 
-TODO/NOTES:
+TODO:
 
     lists
         - first usage in a function should be @blah (in args, or first
@@ -148,7 +153,6 @@ extern int twokRun(char *code, void *(*externLookup)(char *name));
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include <assert.h>
 #include <setjmp.h>
 #include <string.h>
 #include <ctype.h>
@@ -219,7 +223,7 @@ static int atomplus();
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
 #define tvfree(a)                   ((a) ? (free(tv__zvraw(a)),(void*)0) : (void*)0)
 #define tvpush(a,v)                 (tv__zvmaybegrow(a,1), (a)[tv__zvn(a)++] = (v))
-#define tvpop(a)                    (assert(tv__zvn(a) > 0), tv__zvn(a)-=1)
+#define tvpop(a)                    (((tv__zvn(a) > 0)?((void)0):error("assert")), tv__zvn(a)-=1)
 #define tvsize(a)                   ((a) ? tv__zvn(a) : 0)
 #define tvadd(a,n)                  (tv__zvmaybegrow(a,n), tv__zvn(a)+=(n), &(a)[tv__zvn(a)-(n)])
 #define tvlast(a)                   ((a)[tv__zvn(a)-1])

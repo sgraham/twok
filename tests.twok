@@ -371,13 +371,9 @@ def stuff(x, y):
 def __main__():
     return stuff(10, 100)
 
-### 0 DISABLED lists
+### 0 lists
 def __main__():
-    @L = []
-    push(L, 3)
-    push(L, 4)
-    x = pop(L)
-    L[14]
+    @L = 0
 
 
 ### 99999 END
