@@ -1,6 +1,6 @@
 /* twok-0.10
    public domain
-   python-ish native compiling scripting language
+   python-styled native-compiling scripting language
    http://h4ck3r.net/#twok
 
    Scott Graham 2011 <scott.twok@h4ck3r.net>
@@ -16,7 +16,7 @@ in *one* C file that you want to contain the implementation.
 
 ABOUT:
 
-    Native compile on x64, ARM (not yet), PPC (not yet), or interpreted for console
+    Native compile on x64, ARM (not yet), PPC (not yet), or interpreted
     No external dependencies
 
     ("twok" is a reference to the lines of code for the implementation)
@@ -25,16 +25,36 @@ ABOUT:
 TODO:
 
     lists
-        - first usage in a function should be @blah (in args, or first
-          assignment to local)
-        - becomes pointer for rest of function, and can be used without @:
+        L = []
+        push(L, 4)
+        push(L, 3)
+        x = pop(L)
+    [1,2,3,...] and "qwerty" construct lists.
+    
+    the value stored in L points to a word which points to the vector. this is
+    done so that push(L, ...) can be call-by-value, rather than having to
+    either make all calls require a token to indicate passing the address or
+    to require function type annotation to indicate the address should be
+    passed rather than the value.
 
-            @L = []
-            push(L, 4)
-            push(L, 3)
-            x = pop(L)
+    hmm, that works when passed to C, but what do we do in-language? need to
+    have dereference operations. possibly:
+        L[0]
+        *(L)
+        *(L+1)
+        L->1
+        L.1
+        L:1
+        L@1
+        @L
+    . is nice if we add some simple 'structure' definitions and allow defining x === 0
+    for L.x === L.0, but only good for lists, not plain pointers
 
-    C function calls and runtime lib
+    @L is highlighted as a decorator in python. perhaps good as address-of?
+    other possibilities $ % & ^ ` ? !
+    -- either @ or &
+
+
     mempush/pop for 'gc'
     @var and free func for manual memory
     uninit var tracking (make it optional?)
@@ -64,6 +84,10 @@ NOTES: (mostly internal mumbling)
           straight line, so TOS doesn't mirror branching or bool ops. using
           stack means that the registers/vst aren't affected outside each arm
           of the or/and conditions.
+    C function calls and runtime lib
+        - manually exported currently
+        - imported using "extern". functions can be passed in/out as pointers
+          and share abi with host's C.
     logical not: just == 0 and back into reg
     math functions, + - * / & | ^
     unary ops
@@ -855,6 +879,27 @@ static int atom()
         SKIP(')');
         return 1;
     }
+    else if (CURTOKt == '[')
+    {
+        or_test();
+        for (;;)
+        {
+            if (CURTOKt == ']')
+            {
+                printf("WEE\n");
+                /* pop all */
+            }
+            else if (CURTOKt == ',')
+            {
+                NEXT();
+                or_test();
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
     else if (CURTOKt == T_NUM)
     {
         i_const(CURTOK->data.tokn);
@@ -863,23 +908,15 @@ static int atom()
     }
     else if (CURTOKt == '@' || CURTOKt == T_IDENT)
     {
-        int i, isptr = 0;
-        if (CURTOKt == '@')
-        {
-            isptr = 1;
-            NEXT();
-        }
+        int i;
         if ((i = tvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i);
         else if ((i = tvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
         else
         {
-            if (!tvcontains(C.locals, CURTOK->data.str))
-            {
-                tvpush(C.locals, CURTOK->data.str);
-                tvpush(C.localisptr, isptr);
-            }
-            i_addrlocal(tvindexof(C.locals, CURTOK->data.str));
+            if (!tvcontains(C.locals, CURTOK->data.str)) tvpush(C.locals, CURTOK->data.str);
+            i = tvindexof(C.locals, CURTOK->data.str);
+            i_addrlocal(i);
         }
         NEXT();
         return 1;

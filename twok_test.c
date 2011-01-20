@@ -28,12 +28,26 @@ long long XXXtest3(long long a, long long b, long long c, long long d, long long
     return (h-a)+(g-b)+(f-c)+(e-d) + 1;
 }
 
+void test5()
+{
+    printf("in test5");
+}
+
+int test6(void(*fp)())
+{
+    int ret = fp == test5;
+    fp();
+    return ret;
+}
+
 void* getExternFunc(char *name)
 {
     if (strcmp(name, "test0") == 0) return XXXtest0;
     if (strcmp(name, "test1") == 0) return XXXtest1;
     if (strcmp(name, "test2") == 0) return XXXtest2;
     if (strcmp(name, "test3") == 0) return XXXtest3;
+    if (strcmp(name, "test5") == 0) return test5;
+    if (strcmp(name, "test6") == 0) return test6;
     return NULL;
 }
 
