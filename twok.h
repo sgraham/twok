@@ -1,10 +1,10 @@
-/* zept-0.10 - public domain, python-ish script lang - http://h4ck3r.net/#Zept
-   Scott Graham 2011 <scott.zept@h4ck3r.net>
+/* twok-0.10 - public domain, python-ish script lang - http://h4ck3r.net/#twok
+   Scott Graham 2011 <scott.twok@h4ck3r.net>
                                     No warranty implied; use at your own risk.
 
 Before including,
 
-    #define ZEPT_DEFINE_IMPLEMENTATION
+    #define TWOK_DEFINE_IMPLEMENTATION
 
 in *one* C file that you want to contain the implementation.
 
@@ -12,10 +12,9 @@ in *one* C file that you want to contain the implementation.
 ABOUT:
 
     Native compile on x64, ARM (not yet), PPC (not yet), or interpreted for console
-    < 1k LOC (`sloccount zept.h`)
     No external dependencies
 
-    ("zepto" is the SI prefix for 10e-21)
+    ("twok" is a reference to the lines of code for the implementation)
 
 
 TODO/NOTES:
@@ -129,22 +128,22 @@ NOTES: (mostly internal mumbling)
 
 */
 
-#ifndef INCLUDED_ZEPT_H
-#define INCLUDED_ZEPT_H
+#ifndef INCLUDED_TWOK_H
+#define INCLUDED_TWOK_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-extern int zeptRun(char *code, void *(*externLookup)(char *name));
+extern int twokRun(char *code, void *(*externLookup)(char *name));
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* INCLUDED_ZEPT_H */
+#endif /* INCLUDED_TWOK_H */
 
-#ifdef ZEPT_DEFINE_IMPLEMENTATION
+#ifdef TWOK_DEFINE_IMPLEMENTATION
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -155,17 +154,17 @@ extern int zeptRun(char *code, void *(*externLookup)(char *name));
 #include <ctype.h>
 #if __unix__ || (__APPLE__ && __MACH__)
     #include <sys/mman.h>
-    static void* zept_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
-    static void zept_freeExec(void* p, int size) { munmap(p, size); }
-    static int zept_CTZ(int x) { return __builtin_ctz(x); }
+    static void* twok_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
+    static void twok_freeExec(void* p, int size) { munmap(p, size); }
+    static int twok_CTZ(int x) { return __builtin_ctz(x); }
 #elif _WIN32
     #if _M_PPC
     #else
         #include <windows.h>
-        static void* zept_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
-        static void zept_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
+        static void* twok_allocExec(int size) { void* p = VirtualAlloc(0, size, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE); memset(p, 0x90, size); return p; }
+        static void twok_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
         #pragma intrinsic(_BitScanForward)
-        static int zept_CTZ(int x) { unsigned long ret; _BitScanForward(&ret, x); return ret; }
+        static int twok_CTZ(int x) { unsigned long ret; _BitScanForward(&ret, x); return ret; }
         #define strdup _strdup
         #define strtoll _strtoi64
     #endif
@@ -193,9 +192,9 @@ typedef struct Value {
     } data;
     int label;
 } Value;
-#define VAL(t, d) do { Value _ = { { (t) }, { (d) }, 0xbad1abe1 }; zvpush(C.vst, _); } while(0)
+#define VAL(t, d) do { Value _ = { { (t) }, { (d) }, 0xbad1abe1 }; tvpush(C.vst, _); } while(0)
 #define J_UNCOND 2
-#define zarrsize(a) ((int)(sizeof(a)/sizeof((a)[0])))
+#define tarrsize(a) ((int)(sizeof(a)/sizeof((a)[0])))
 
 typedef struct Context {
     Token *tokens;
@@ -218,39 +217,39 @@ static int atomplus();
  */
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
-#define zvfree(a)                   ((a) ? (free(zv__zvraw(a)),(void*)0) : (void*)0)
-#define zvpush(a,v)                 (zv__zvmaybegrow(a,1), (a)[zv__zvn(a)++] = (v))
-#define zvpop(a)                    (assert(zv__zvn(a) > 0), zv__zvn(a)-=1)
-#define zvsize(a)                   ((a) ? zv__zvn(a) : 0)
-#define zvadd(a,n)                  (zv__zvmaybegrow(a,n), zv__zvn(a)+=(n), &(a)[zv__zvn(a)-(n)])
-#define zvlast(a)                   ((a)[zv__zvn(a)-1])
-#define zvindexofnp(a,i,n,psize)    (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
-#define zvindexof(a,i)              ((a) ? (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),zv__zvn(a),sizeof(*(a)))) : -1)
-#define zvcontainsnp(a,i,n,psize)   ((a) ? (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
-#define zvcontainsp(a,i,psize)      (zvcontainsnp((a),i,zv__zvn(a),psize))
-#define zvcontainsn(a,i,n)          ((a) ? (zvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
-#define zvcontainsn_nonnull(a,i,n)  (zv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,sizeof(*(a)))!=-1) /* workaround for stupid warning */
-#define zvcontains(a,i)             ((a) ? (zvcontainsp((a),i,sizeof(*(a)))) : 0)
+#define tvfree(a)                   ((a) ? (free(tv__zvraw(a)),(void*)0) : (void*)0)
+#define tvpush(a,v)                 (tv__zvmaybegrow(a,1), (a)[tv__zvn(a)++] = (v))
+#define tvpop(a)                    (assert(tv__zvn(a) > 0), tv__zvn(a)-=1)
+#define tvsize(a)                   ((a) ? tv__zvn(a) : 0)
+#define tvadd(a,n)                  (tv__zvmaybegrow(a,n), tv__zvn(a)+=(n), &(a)[tv__zvn(a)-(n)])
+#define tvlast(a)                   ((a)[tv__zvn(a)-1])
+#define tvindexofnp(a,i,n,psize)    (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
+#define tvindexof(a,i)              ((a) ? (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),tv__zvn(a),sizeof(*(a)))) : -1)
+#define tvcontainsnp(a,i,n,psize)   ((a) ? (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
+#define tvcontainsp(a,i,psize)      (tvcontainsnp((a),i,tv__zvn(a),psize))
+#define tvcontainsn(a,i,n)          ((a) ? (tvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
+#define tvcontainsn_nonnull(a,i,n)  (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,sizeof(*(a)))!=-1) /* workaround for stupid warning */
+#define tvcontains(a,i)             ((a) ? (tvcontainsp((a),i,sizeof(*(a)))) : 0)
 
-#define zv__zvraw(a) ((int *) (a) - 2)
-#define zv__zvm(a)   zv__zvraw(a)[0]
-#define zv__zvn(a)   zv__zvraw(a)[1]
+#define tv__zvraw(a) ((int *) (a) - 2)
+#define tv__zvm(a)   tv__zvraw(a)[0]
+#define tv__zvn(a)   tv__zvraw(a)[1]
 
-#define zv__zvneedgrow(a,n)  ((a)==0 || zv__zvn(a)+n >= zv__zvm(a))
-#define zv__zvmaybegrow(a,n) (zv__zvneedgrow(a,(n)) ? zv__zvgrow(a,n) : 0)
-#define zv__zvgrow(a,n)  zv__zvgrowf((void **) &(a), (n), sizeof(*(a)))
+#define tv__zvneedgrow(a,n)  ((a)==0 || tv__zvn(a)+n >= tv__zvm(a))
+#define tv__zvmaybegrow(a,n) (tv__zvneedgrow(a,(n)) ? tv__zvgrow(a,n) : 0)
+#define tv__zvgrow(a,n)  tv__zvgrowf((void **) &(a), (n), sizeof(*(a)))
 
-static void zv__zvgrowf(void **arr, int increment, int itemsize)
+static void tv__zvgrowf(void **arr, int increment, int itemsize)
 {
-    int m = *arr ? 2*zv__zvm(*arr)+increment : increment+1;
-    void *p = realloc(*arr ? zv__zvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
+    int m = *arr ? 2*tv__zvm(*arr)+increment : increment+1;
+    void *p = realloc(*arr ? tv__zvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
     if (p) {
         if (!*arr) ((int *) p)[1] = 0;
         *arr = (void *) ((int *) p + 2);
-        zv__zvm(*arr) = m;
+        tv__zvm(*arr) = m;
     }
 }
-static int zv__zvfind(char* arr, char* find, int itemsize, int n, int partialsize)
+static int tv__zvfind(char* arr, char* find, int itemsize, int n, int partialsize)
 {
     int i;
     for (i = 0; i < n; ++i)
@@ -289,7 +288,7 @@ static void error(char *fmt, ...)
     char tmp[256];
 
     va_start(ap, fmt);
-    if (C.curtok < zvsize(C.tokens)) /* for errors after parse finished */
+    if (C.curtok < tvsize(C.tokens)) /* for errors after parse finished */
     {
         geterrpos(CURTOK->pos, &line, &col, &text);
         sprintf(C.errorText, "line %d, col %d:\n", line, col);
@@ -307,7 +306,7 @@ static void error(char *fmt, ...)
 }
 
 /*
- * tokenize. build a zv of Token's for rest. indent/dedent is a bit icky.
+ * tokenize. build a tv of Token's for rest. indent/dedent is a bit icky.
  */
 
 static char KWS[] = " if elif else or for def return extern mod and not print pass << >> <= >= == != ";
@@ -315,16 +314,16 @@ static char KWS[] = " if elif else or for def return extern mod and not print pa
 char* strintern(char* s)
 {
     int i;
-    for (i = 0; i < zvsize(C.strs); ++i)
+    for (i = 0; i < tvsize(C.strs); ++i)
         if (strcmp(s, C.strs[i]) == 0)
             return C.strs[i];
-    zvpush(C.strs, strdup(s));
-    return zvlast(C.strs);
+    tvpush(C.strs, strdup(s));
+    return tvlast(C.strs);
 }
 enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
-#define TOK(t) do { Token _ = { t, (int)(startpos - C.input), { strintern(#t) } }; zvpush(C.tokens, _); } while(0)
-#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), { strintern(s) } }; zvpush(C.tokens, _); } while(0)
-#define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input), { 0 } }; _.data.tokn=v; zvpush(C.tokens, _); } while(0)
+#define TOK(t) do { Token _ = { t, (int)(startpos - C.input), { strintern(#t) } }; tvpush(C.tokens, _); } while(0)
+#define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), { strintern(s) } }; tvpush(C.tokens, _); } while(0)
+#define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input), { 0 } }; _.data.tokn=v; tvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
 static void tokenize()
@@ -334,7 +333,7 @@ static void tokenize()
     int *indents = 0;
     char *ident = 0, *tempident = 0;
 
-    zvpush(indents, 0);
+    tvpush(indents, 0);
 
     for (;;)
     {
@@ -344,11 +343,11 @@ static void tokenize()
 
         if (*pos == 0)
         {
-donestream: for (i = 1; i < zvsize(indents); ++i)
+donestream: for (i = 1; i < tvsize(indents); ++i)
                 TOK(T_DEDENT);
             TOK(T_END);
-            zvfree(indents);
-            zvfree(ident);
+            tvfree(indents);
+            tvfree(ident);
             return;
         }
 
@@ -359,15 +358,15 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
             else
                 ++pos;
         }
-        while (column < zvlast(indents))
+        while (column < tvlast(indents))
         {
-            if (!zvcontains(indents, column)) error("unindent does not match any outer indentation level");
-            zvpop(indents);
+            if (!tvcontains(indents, column)) error("unindent does not match any outer indentation level");
+            tvpop(indents);
             TOK(T_DEDENT);
         }
-        if (column > zvlast(indents))
+        if (column > tvlast(indents))
         {
-            zvpush(indents, column);
+            tvpush(indents, column);
             TOK(T_INDENT);
         }
 
@@ -375,27 +374,27 @@ donestream: for (i = 1; i < zvsize(indents); ++i)
         {
             while (*pos == ' ') ++pos;
             startpos = pos;
-            ident = zvfree(ident);
+            ident = tvfree(ident);
             tok = *pos;
             if (isid(*pos))
             {
                 while (isid(*pos))
-                    zvpush(ident, *pos++);
-                zvpush(ident, 0);
+                    tvpush(ident, *pos++);
+                tvpush(ident, 0);
                 if (isdigit(tok))
                     TOKN(T_NUM, strtoll(ident, 0, 0));
                 else
                 {
                     /* oops, need to search with space before/after so "i"
                      * isn't found in "if" and "x" isn't found in "extern". */
-                    zvpush(tempident, ' ');
-                    for (i = 0; i < zvsize(ident); ++i) zvpush(tempident, ident[i]);
-                    zvpush(tempident, ' ');
-                    zvpush(tempident, 0);
+                    tvpush(tempident, ' ');
+                    for (i = 0; i < tvsize(ident); ++i) tvpush(tempident, ident[i]);
+                    tvpush(tempident, ' ');
+                    tvpush(tempident, 0);
                     tok = T_IDENT;
                     if (strstr(KWS, tempident)) tok = (int)(strstr(KWS, tempident) + 1 /*space*/ - KWS + T_KW);
                     TOKI(tok, ident);
-                    tempident = zvfree(tempident);
+                    tempident = tvfree(tempident);
                 }
             }
             else if (*pos == '#')
@@ -465,7 +464,7 @@ typedef struct NativeContext {
 } NativeContext;
 static NativeContext NC;
 
-#define vreg_to_enc(vr) (((vr) >= V_REG_R8) ? zept_CTZ(((vr)>>8)) : zept_CTZ(vr))
+#define vreg_to_enc(vr) (((vr) >= V_REG_R8) ? twok_CTZ(((vr)>>8)) : twok_CTZ(vr))
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
@@ -474,28 +473,28 @@ static char* functhunkaddr(long long idx) { return C.codesegend - (idx + 1) * FU
 static void addfunc(char* name, char* addr)
 {
     char* p;
-    if (zvcontains(C.funcnames, name)) error("%s already defined", name);
-    zvpush(C.funcnames, name);
-    zvpush(C.funcaddrs, addr);
-    p = functhunkaddr(zvsize(C.funcnames) - 1);
+    if (tvcontains(C.funcnames, name)) error("%s already defined", name);
+    tvpush(C.funcnames, name);
+    tvpush(C.funcaddrs, addr);
+    p = functhunkaddr(tvsize(C.funcnames) - 1);
     *p++ = 0xe9; /* jmp relimmed */
     put32(p, (int)(addr - p - 4)); p += 4;
     *p++ = 0xcc; *p++ = 0xcc; *p++ = 0xcc; /* add int3 to rest of thunk */
 }
-static int funcidx(char* name) { char* p = strintern(name); return zvindexof(C.funcnames, p); }
+static int funcidx(char* name) { char* p = strintern(name); return tvindexof(C.funcnames, p); }
 
 /* store the given register (offset) into the given stack slot */
 static void g_storespill(int reg, int slot)
 {
     lead(reg); ob(0x89); ob(0x85 + vreg_to_enc(reg));
-    outnum32((-1 - slot - zvsize(NC.paramnames) - zvsize(C.locals)) * REG_SIZE);
+    outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
 /* load spill # slot into reg */
 static void g_loadspill(int reg, int slot)
 {
     lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg));
-    outnum32((-1 - slot - zvsize(NC.paramnames) - zvsize(C.locals)) * REG_SIZE);
+    outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
 
@@ -507,21 +506,21 @@ static int getReg(int valid)
     for (i = V_REG_FIRST; i <= V_REG_LAST; i <<= 1)
     {
         if ((i & valid) == 0) continue;
-        for (j = 0; j < zvsize(C.vst); ++j)
+        for (j = 0; j < tvsize(C.vst); ++j)
             if ((C.vst[j].tag.type & i))
                 break;
         /* not in use, return this one */
-        if (j == zvsize(C.vst))
+        if (j == tvsize(C.vst))
             return i;
     }
 
     /* otherwise, find the oldest in the class */
-    for (j = 0; j < zvsize(C.vst); ++j)
+    for (j = 0; j < tvsize(C.vst); ++j)
     {
         if ((C.vst[j].tag.type & valid))
         {
             /* and a location to spill it to */
-            for (i = 0; i < zarrsize(NC.spills); ++i)
+            for (i = 0; i < tarrsize(NC.spills); ++i)
                 if (!NC.spills[i]) break;
 
             /* and send it there and update the flags */
@@ -542,8 +541,8 @@ static int getReg(int valid)
 
 static int g_rval(int valid)
 {
-    int reg, reg2, tag = zvlast(C.vst).tag.type;
-    long long val = zvlast(C.vst).data.l;
+    int reg, reg2, tag = tvlast(C.vst).tag.type;
+    long long val = tvlast(C.vst).data.l;
     if (tag & V_IMMED)
     {
         if (tag & V_ADDR)
@@ -593,14 +592,14 @@ static int g_rval(int valid)
     {
         error("internal error, unexpected stack state");
     }
-    zvpop(C.vst);
+    tvpop(C.vst);
     return reg;
 }
 
 static int g_lval(int valid)
 {
-    int reg = 0, tag = zvlast(C.vst).tag.type;
-    long long val = zvlast(C.vst).data.l;
+    int reg = 0, tag = tvlast(C.vst).tag.type;
+    long long val = tvlast(C.vst).data.l;
     if (tag & V_ADDR)
     {
         if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
@@ -622,7 +621,7 @@ static int g_lval(int valid)
     {
         error("expecting lval");
     }
-    zvpop(C.vst);
+    tvpop(C.vst);
     return reg;
 }
 
@@ -640,10 +639,10 @@ static void i_func(char *name, char **paramnames)
     NC.paramnames = paramnames;
     /* copy args to shadow location, we put them in "upside down" from how
      * they are on the arg stack */
-    for (i = 0; i < zvsize(paramnames); ++i)
+    for (i = 0; i < tvsize(paramnames); ++i)
     {
         /* get either from reg, or from stack, depending on index and abi */
-        if (i >= zarrsize(funcArgRegs))
+        if (i >= tarrsize(funcArgRegs))
         {
             ob(0x48); ob(0x8b); ob(0x85); outnum32(16+8*i); /* mov rax, [rbp + argoffset] */
         }
@@ -662,16 +661,16 @@ static void i_extern(Token* tok)
     /* note, tok->data.str is already interned */
     void *p = C.externLookup(tok->data.str);
     if (!p) error("'%s' not found", tok->data.str);
-    if (zvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
-    zvpush(C.externnames, tok->data.str);
-    zvpush(C.externaddrs, p);
+    if (tvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
+    tvpush(C.externnames, tok->data.str);
+    tvpush(C.externaddrs, p);
 }
 
 static void i_ret() { g_rval(V_REG_RAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
 static void i_endfunc()
 {
     i_ret();
-    put32(NC.numlocsp, (zvsize(C.locals)+1) * REG_SIZE + 256); /* todo; XXX hardcoded # spills */
+    put32(NC.numlocsp, (tvsize(C.locals)+1) * REG_SIZE + 256); /* todo; XXX hardcoded # spills */
 }
 
 static void i_cmp(int op)
@@ -692,7 +691,7 @@ static void i_cmp(int op)
     lead(into); ob(0xb8 + vreg_to_enc(into));
     outnum64(0);
     ob(0x0f);
-    ob(0x90 + cmpccs[zvindexofnp(cmpccs, op, 6, 1)].cc);
+    ob(0x90 + cmpccs[tvindexofnp(cmpccs, op, 6, 1)].cc);
     ob(0xc0 + vreg_to_enc(into));
     VAL(into, 0);
 }
@@ -741,18 +740,18 @@ static void i_store()
 static void i_storelocal(int loc)
 {
     int val = g_rval(V_REG_ANY), into;
-    i_addr(-loc - zvsize(NC.paramnames) - 1, V_LOCAL);
+    i_addr(-loc - tvsize(NC.paramnames) - 1, V_LOCAL);
     into = g_lval(V_REG_ANY & ~val);
     lead2(into, val); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
 static void i_addrparam(int loc) { i_addr(-loc - 1, V_LOCAL); }
-static void i_addrlocal(int loc) { i_addr(-loc - zvsize(NC.paramnames) - 1, V_LOCAL); }
+static void i_addrlocal(int loc) { i_addr(-loc - tvsize(NC.paramnames) - 1, V_LOCAL); }
 
 static void i_call(int argcount)
 {
-    int i, stackdelta = (argcount - zarrsize(funcArgRegs)) * 8, argnostack = 1;
+    int i, stackdelta = (argcount - tarrsize(funcArgRegs)) * 8, argnostack = 1;
     if (stackdelta < 0) stackdelta = 0;
 #if _WIN32
     stackdelta += 32; /* shadow stack on msft */
@@ -767,11 +766,11 @@ static void i_call(int argcount)
     for (i = 0; i < argcount; ++i)
     {
         int idx = argcount - i - 1;
-        if (idx >= zarrsize(funcArgRegs))
+        if (idx >= tarrsize(funcArgRegs))
         {
             g_rval(V_REG_R11);
             /* mov [rsp+X], r11 */
-            ob(0x4c); ob(0x89); ob(0x5c); ob(0x24); ob((idx - zarrsize(funcArgRegs)*argnostack) * 8);
+            ob(0x4c); ob(0x89); ob(0x5c); ob(0x24); ob((idx - tarrsize(funcArgRegs)*argnostack) * 8);
         }
         else g_rval(funcArgRegs[idx]);
     }
@@ -805,7 +804,7 @@ static void i_math(int op)
         { '&', 0x21 },
         { '^', 0x31 },
         { '|', 0x09 } };
-    int opi = zvindexofnp(map, op, 6, 1);
+    int opi = tvindexofnp(map, op, 6, 1);
     if (opi >= 0 || op == '*')
     {
         int v1 = g_rval(V_REG_ANY);
@@ -830,7 +829,7 @@ static void i_math(int op)
 /*
  * parsing and intermediate gen
  */
-#define NEXT() do { if (C.curtok >= zvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
+#define NEXT() do { if (C.curtok >= tvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK->data.str); NEXT(); } while(0)
 
 static int genlocal()
@@ -839,8 +838,8 @@ static int genlocal()
     char buf[128], *name;
     sprintf(buf, "$loc%d", count++);
     name = strintern(buf);
-    if (!zvcontains(C.locals, name)) { zvpush(C.locals, name); zvpush(C.localisptr, 0); }
-    return zvindexof(C.locals, name);
+    if (!tvcontains(C.locals, name)) { tvpush(C.locals, name); tvpush(C.localisptr, 0); }
+    return tvindexof(C.locals, name);
 }
 
 static int atom()
@@ -866,17 +865,17 @@ static int atom()
             isptr = 1;
             NEXT();
         }
-        if ((i = zvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i);
-        else if ((i = zvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
+        if ((i = tvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i);
+        else if ((i = tvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
         else
         {
-            if (!zvcontains(C.locals, CURTOK->data.str))
+            if (!tvcontains(C.locals, CURTOK->data.str))
             {
-                zvpush(C.locals, CURTOK->data.str);
-                zvpush(C.localisptr, isptr);
+                tvpush(C.locals, CURTOK->data.str);
+                tvpush(C.localisptr, isptr);
             }
-            i_addrlocal(zvindexof(C.locals, CURTOK->data.str));
+            i_addrlocal(tvindexof(C.locals, CURTOK->data.str));
         }
         NEXT();
         return 1;
@@ -900,14 +899,14 @@ static char** parameters()
     char **ret = 0;
     if (CURTOKt == T_IDENT) 
     {
-        zvpush(ret, CURTOK->data.str);
+        tvpush(ret, CURTOK->data.str);
         NEXT();
     }
     while (ret && CURTOKt == ',')
     {
         SKIP(',');
         if (CURTOKt != T_IDENT) error("expecting parameter name");
-        zvpush(ret, CURTOK->data.str);
+        tvpush(ret, CURTOK->data.str);
         NEXT();
     }
     return ret;
@@ -974,7 +973,7 @@ static void comparison()
     for (;;)
     {
         Token* cmp = CURTOK;
-        if (!zvcontainsn_nonnull(cmps, CURTOKt, 6)) break;
+        if (!tvcontainsn_nonnull(cmps, CURTOKt, 6)) break;
         NEXT();
         expr();
         i_cmp(cmp->type);
@@ -1028,7 +1027,7 @@ static void expr_stmt()
         or_test();
         i_store();
     }
-    else zvpop(C.vst); /* discard */
+    else tvpop(C.vst); /* discard */
     SKIP(T_NL);
 }
 
@@ -1110,8 +1109,8 @@ static void funcdef()
     {
         char **argnames, *fname;
         SKIP(KW(def));
-        zvfree(C.locals);
-        zvfree(C.localisptr);
+        tvfree(C.locals);
+        tvfree(C.localisptr);
         fname = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
@@ -1120,7 +1119,7 @@ static void funcdef()
         SKIP(')');
         suite();
         i_endfunc();
-        zvfree(argnames);
+        tvfree(argnames);
     }
 }
 
@@ -1137,7 +1136,7 @@ static void fileinput()
 /*
  * main api entry point
  */
-int zeptRun(char *code, void *(*externLookup)(char *name))
+int twokRun(char *code, void *(*externLookup)(char *name))
 {
     int ret, allocSize, i, entryidx;
     memset(&C, 0, sizeof(C));
@@ -1150,7 +1149,7 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
         /* dump tokens generated from stream */
 #if 0
         { int j;
-        for (j = 0; j < zvsize(C.tokens); ++j)
+        for (j = 0; j < tvsize(C.tokens); ++j)
         {
             if (C.tokens[j].type == T_NUM)
                 printf("%d: %d %d\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
@@ -1158,10 +1157,10 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
                 printf("%d: %d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
         }}
 #endif
-        C.codeseg = C.codep = zept_allocExec(allocSize);
+        C.codeseg = C.codep = twok_allocExec(allocSize);
         C.codesegend = C.codeseg + allocSize;
         fileinput();
-        if (zvsize(C.vst) != 0) error("internal error, values left on stack");
+        if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
 #if 1
         { FILE* f = fopen("dump.dat", "wb");
@@ -1175,17 +1174,17 @@ int zeptRun(char *code, void *(*externLookup)(char *name))
         ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
     }
     else ret = -1;
-    zvfree(C.tokens);
-    zvfree(C.vst);
-    zvfree(C.instrs);
-    zvfree(C.locals);
-    zvfree(C.localisptr);
-    for (i = 0; i < zvsize(C.strs); ++i) free(C.strs[i]);
-    zvfree(C.strs);
-    zvfree(C.funcnames); zvfree(C.funcaddrs);
-    zvfree(C.externnames); zvfree(C.externaddrs);
-    zept_freeExec(C.codeseg, allocSize);
+    tvfree(C.tokens);
+    tvfree(C.vst);
+    tvfree(C.instrs);
+    tvfree(C.locals);
+    tvfree(C.localisptr);
+    for (i = 0; i < tvsize(C.strs); ++i) free(C.strs[i]);
+    tvfree(C.strs);
+    tvfree(C.funcnames); tvfree(C.funcaddrs);
+    tvfree(C.externnames); tvfree(C.externaddrs);
+    twok_freeExec(C.codeseg, allocSize);
     return ret;
 }
 
-#endif /* ZEPT_DEFINE_IMPLEMENTATION */
+#endif /* TWOK_DEFINE_IMPLEMENTATION */
