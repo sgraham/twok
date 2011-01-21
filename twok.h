@@ -437,7 +437,7 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
                     /* oops, need to search with space before/after so "i"
                      * isn't found in "if" and "x" isn't found in "extern". */
                     tvpush(tempident, ' ');
-                    for (i = 0; i < tvsize(ident); ++i) tvpush(tempident, ident[i]);
+                    for (i = 0; i < tvsize(ident) - 1; ++i) tvpush(tempident, ident[i]); /* don't inc nul */
                     tvpush(tempident, ' ');
                     tvpush(tempident, 0);
                     tok = T_IDENT;
@@ -480,7 +480,7 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
 /* currently used: rax, rcx, rdx, rsi, rdi; all volatile across calls.
  * hmm. actually difficult to construct basic math ops that use more than 4
  * regs anyway, so not worth it straight away. */
-enum { V_TEMP=0x1000, V_ADDR=0x2000, V_LOCAL=0x4000, V_FUNC=0x8000, V_IMMED=0x10000,
+enum { V_TEMP=0x1000, V_ISADDR=0x2000, V_LOCAL=0x4000, V_FUNC=0x8000, V_IMMED=0x10000, V_WANTADDR=0x20000,
        V_REG_RAX=0x0001, V_REG_RCX=0x0002, V_REG_RDX=0x0004, V_REG_RBX=0x0008,
        V_REG_RSP=0x0010, V_REG_RBP=0x0020, V_REG_RSI=0x0040, V_REG_RDI=0x0080,
        V_REG_R8=0x0100, V_REG_R9=0x0200, V_REG_R10=0x0400, V_REG_R11=0x0800,
@@ -548,6 +548,12 @@ static void g_loadspill(int reg, int slot)
     outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
+static void g_swap()
+{
+    Value tmp = tvlast(C.vst);
+    tvlast(C.vst) = C.vst[tvsize(C.vst) - 2];
+    C.vst[tvsize(C.vst) - 2] = tmp;
+}
 
 static int getReg(int valid)
 {
@@ -590,34 +596,52 @@ static int getReg(int valid)
     return -1;
 }
 
+static int g_lval(int valid)
+{
+    int reg = 0, tag = tvlast(C.vst).tag.type;
+    long long val = tvlast(C.vst).data.l;
+    if (tag & V_ISADDR)
+    {
+        if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
+        else if (tag & V_IMMED)
+        {
+            /* mov Reg, const */
+            reg = getReg(valid);
+            lead(reg); ob(0xb8 + vreg_to_enc(reg));
+            outnum64(val);
+        }
+        else if (tag & V_LOCAL)
+        {
+            reg = getReg(valid);
+            lead(reg); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
+            outnum32(val * REG_SIZE);
+        }
+    }
+    else
+    {
+        error("expecting lval");
+    }
+    tvpop(C.vst);
+    return reg;
+}
+
 static int g_rval(int valid)
 {
     int reg, reg2, tag = tvlast(C.vst).tag.type;
     long long val = tvlast(C.vst).data.l;
     if (tag & V_IMMED)
     {
-        if (tag & V_ADDR)
-        {
-            /* mov Reg, const */
-            reg = getReg(valid);
-            lead(reg); ob(0xb8 + vreg_to_enc(reg));
-            outnum64(val);
-            /* mov [Reg], Reg */
-            lead2(reg, reg); ob(0x89);
-            ob(vreg_to_enc(reg) + vreg_to_enc(reg) * 8);
-        }
-        else
-        {
-            /* mov Reg, const */
-            reg = getReg(valid);
-            lead(reg); ob(0xb8 + vreg_to_enc(reg));
-            outnum64(val);
-        }
+        if (tag & V_WANTADDR) error("cannot take address of immediate");
+        /* mov Reg, const */
+        reg = getReg(valid);
+        lead(reg); ob(0xb8 + vreg_to_enc(reg));
+        outnum64(val);
     }
     else if (tag & V_LOCAL)
     {
         /* todo; uninit var; keep shadow stack of initialized flags, error on
          * read before write. need to figure out calling C lib */
+        if (tag & V_WANTADDR) return g_lval(valid);
         reg = getReg(valid);
         lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 8); /* mov rXx, [rbp + xxx] (long form) */
         outnum32(val * REG_SIZE);
@@ -647,37 +671,7 @@ static int g_rval(int valid)
     return reg;
 }
 
-static int g_lval(int valid)
-{
-    int reg = 0, tag = tvlast(C.vst).tag.type;
-    long long val = tvlast(C.vst).data.l;
-    if (tag & V_ADDR)
-    {
-        if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
-        else if (tag & V_IMMED)
-        {
-            /* mov Reg, const */
-            reg = getReg(valid);
-            lead(reg); ob(0xb8 + vreg_to_enc(reg));
-            outnum64(val);
-        }
-        else if (tag & V_LOCAL)
-        {
-            reg = getReg(valid);
-            lead(reg); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
-            outnum32(val * REG_SIZE);
-        }
-    }
-    else
-    {
-        error("expecting lval");
-    }
-    tvpop(C.vst);
-    return reg;
-}
-
 static void i_const(long long v) { VAL(V_IMMED, v); }
-static void i_addr(long long v, int extra) { VAL(extra | V_ADDR, v); } /* extra is V_LOCAL, V_FUNC, V_IMMED */
 static void i_func(char *name, char **paramnames)
 {
     int i;
@@ -789,17 +783,15 @@ static void i_store()
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
+static void i_addrparam(int loc, int addrof) { VAL(V_LOCAL | V_ISADDR | (addrof ? V_WANTADDR : 0), -loc - 1); }
+static void i_addrlocal(int loc, int addrof) { VAL(V_LOCAL | V_ISADDR | (addrof ? V_WANTADDR : 0), -loc - tvsize(NC.paramnames) - 1); }
 static void i_storelocal(int loc)
 {
-    int val = g_rval(V_REG_ANY), into;
-    i_addr(-loc - tvsize(NC.paramnames) - 1, V_LOCAL);
-    into = g_lval(V_REG_ANY & ~val);
-    lead2(into, val); ob(0x89);
-    ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
+    i_addrlocal(loc, 0);
+    g_swap();
+    i_store();
 }
 
-static void i_addrparam(int loc) { i_addr(-loc - 1, V_LOCAL); }
-static void i_addrlocal(int loc) { i_addr(-loc - tvsize(NC.paramnames) - 1, V_LOCAL); }
 
 static void i_call(int argcount)
 {
@@ -932,15 +924,20 @@ static int atom()
     }
     else if (CURTOKt == '@' || CURTOKt == T_IDENT)
     {
-        int i;
-        if ((i = tvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i);
+        int i, isaddrof = 0;
+        if (CURTOKt == '@')
+        {
+            isaddrof = 1;
+            NEXT();
+        }
+        if ((i = tvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i, isaddrof);
         else if ((i = tvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
-        else if (funcidx(CURTOK->data.str) != -1) i_addr(funcidx(CURTOK->data.str), V_FUNC);
+        else if (funcidx(CURTOK->data.str) != -1) VAL(V_FUNC, funcidx(CURTOK->data.str));
         else
         {
             if (!tvcontains(C.locals, CURTOK->data.str)) tvpush(C.locals, CURTOK->data.str);
             i = tvindexof(C.locals, CURTOK->data.str);
-            i_addrlocal(i);
+            i_addrlocal(i, isaddrof);
         }
         NEXT();
         return 1;
@@ -1069,14 +1066,14 @@ static void name()                              \
         for (;;)                                \
         {                                       \
             i_storelocal(tmp);                  \
-            i_addrlocal(tmp);                   \
+            i_addrlocal(tmp, 0);                \
             label = i_jmpc(cond, label);        \
             if (done) break;                    \
             SKIP(KW(kw));                       \
             sub();                              \
             done = CURTOKt != KW(kw);           \
         }                                       \
-        i_addrlocal(tmp);                       \
+        i_addrlocal(tmp, 0);                    \
     }                                           \
     i_label(label);                             \
 }
@@ -1174,7 +1171,7 @@ static void funcdef()
     {
         char **argnames, *fname;
         SKIP(KW(def));
-        tvfree(C.locals);
+        C.locals = tvfree(C.locals);
         fname = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
@@ -1236,7 +1233,7 @@ int twokRun(char *code, void *(*externLookup)(char *name))
         for (j = 0; j < tvsize(C.tokens); ++j)
         {
             if (C.tokens[j].type == T_NUM)
-                printf("%d: %d %d\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
+                printf("%d: %d %lld\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
             else
                 printf("%d: %d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
         }}
@@ -1246,7 +1243,7 @@ int twokRun(char *code, void *(*externLookup)(char *name))
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);

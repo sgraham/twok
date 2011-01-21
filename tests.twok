@@ -377,7 +377,13 @@ def __main__():
     return 1234
     
 
-### 1 pointers
+### 0 short ident not kw
+def stuff(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z):
+    pass
+def __main__():
+    pass
+
+### 1 func ptrs
 extern test5
 extern test6
 def __main__():
@@ -388,10 +394,11 @@ def __main__():
 def stuff(a, b):
     x = a != 0
     y = a != b
-    return a and b
+    return x and y
 def __main__():
     L = 0
     return stuff(@L, L)
+
 
 ### 1 DISABLED pointers 2
 def __main__():
