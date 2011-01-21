@@ -54,6 +54,24 @@ TODO:
     other possibilities $ % & ^ ` ? !
     -- either @ or &
 
+    greenspun ourselves some macros to make push nicer:
+
+    mac push(L, i):
+        return `list_push(@%(L), %(i))`
+
+    push(L, 1) --> list_push(@L, 1)
+
+
+    mac push_up_to(L, i):
+        for j in range(i):
+            list_push(@%(L), %(i))
+
+    $0-$9 are the arguments in () as a call. $$ is the suite after a :
+    some sort of tokenization location saving/popping to do substitution
+    how does indent/dedent work?
+    -- just do version without blocks for now, it can run some code that
+    generates some more code. `` is like 
+
 
     mempush/pop for 'gc'
     @var and free func for manual memory
@@ -337,6 +355,7 @@ static void error(char *fmt, ...)
  * tokenize. build a tv of Token's for rest. indent/dedent is a bit icky.
  */
 
+/* todo; True, False, None? */
 static char KWS[] = " if elif else or for def return extern mod and not print pass << >> <= >= == != ";
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
 char* strintern(char* s)
