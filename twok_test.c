@@ -30,7 +30,6 @@ long long XXXtest3(long long a, long long b, long long c, long long d, long long
 
 void test5()
 {
-    printf("in test5");
 }
 
 int test6(void(*fp)())
