@@ -259,10 +259,50 @@ static void suite();
 static void or_test();
 static int atomplus();
 static void *stdlibLookup(char *name);
+static void error(char *fmt, ...);
 
 /*
  * misc utilities.
  */
+
+/* bump allocator with save/restore checkpoint stack */
+/*static char *tba_stack[16];
+static int tba_stackidx;*/
+#ifndef TWOK_HEAP_SIZE
+    #define TWOK_HEAP_SIZE (1<<20)
+#endif
+static char tba_heap[TWOK_HEAP_SIZE];
+static char *tbap = tba_heap;
+/* stored as size_t at -1 of returned pointer. if realloc is smaller,
+ * return same, pointer, if it's bigger then always copy to end */
+#define tba_blocksize(p) (*(((size_t*)(p))-1))
+void *tba_realloc(void *ptr, size_t size)
+{
+    char *ret = tbap + sizeof(size_t);
+
+    /* if there was a previous block, and we're not freeing, and it's smaller,
+     * just return, there's nothing to do */
+    if (ptr != NULL && size > 0 && tba_blocksize(ptr) <= size) return ptr;
+
+    /* we don't actually do frees */
+    if (size == 0) return NULL;
+
+    /* now we know it's growing (possibly from null) */
+
+    /* make sure we have enough space */
+    if (tbap + size + sizeof(size_t) > &tba_heap[0] + (TWOK_HEAP_SIZE)) error("out of memory");
+
+    /* store size of newly allocated block, and bump pointer */
+    *(size_t*)(ret - sizeof(size_t)) = size;
+    tbap += size + sizeof(size_t);
+
+    /* make a copy of the old data if there was any */
+    if (ptr)
+        memcpy(ret, ptr, tba_blocksize(ptr) < size ? tba_blocksize(ptr) : size);
+
+    return ret;
+}
+void tba_free(void* p) { (void)p; }
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
 #define tvfree(a)                   ((a) ? (free(tv__tvraw(a)),(void*)0) : (void*)0)
