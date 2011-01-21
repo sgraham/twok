@@ -17,6 +17,7 @@ in *one* C file that you want to contain the implementation.
 ABOUT:
 
     Native compile on x64, ARM (not yet), PPC (not yet), or interpreted
+    <2k LOC implementation
     No external dependencies
 
     ("twok" is a reference to the lines of code for the implementation)
@@ -245,7 +246,7 @@ typedef struct Value {
 typedef struct Context {
     Token *tokens;
     int curtok, irpos;
-    char *input, *codeseg, *codesegend, *codep, **strs, **locals, *localisptr, **funcnames, **funcaddrs, **externnames, **externaddrs;
+    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs;
     void *(*externLookup)(char *name);
     Value *instrs, *vst;
     jmp_buf errBuf;
@@ -257,45 +258,46 @@ static Context C;
 static void suite();
 static void or_test();
 static int atomplus();
+static void *stdlibLookup(char *name);
 
 /*
  * misc utilities.
  */
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
-#define tvfree(a)                   ((a) ? (free(tv__zvraw(a)),(void*)0) : (void*)0)
-#define tvpush(a,v)                 (tv__zvmaybegrow(a,1), (a)[tv__zvn(a)++] = (v))
-#define tvpop(a)                    (((tv__zvn(a) > 0)?((void)0):error("assert")), tv__zvn(a)-=1)
-#define tvsize(a)                   ((a) ? tv__zvn(a) : 0)
-#define tvadd(a,n)                  (tv__zvmaybegrow(a,n), tv__zvn(a)+=(n), &(a)[tv__zvn(a)-(n)])
-#define tvlast(a)                   ((a)[tv__zvn(a)-1])
-#define tvindexofnp(a,i,n,psize)    (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
-#define tvindexof(a,i)              ((a) ? (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),tv__zvn(a),sizeof(*(a)))) : -1)
-#define tvcontainsnp(a,i,n,psize)   ((a) ? (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
-#define tvcontainsp(a,i,psize)      (tvcontainsnp((a),i,tv__zvn(a),psize))
+#define tvfree(a)                   ((a) ? (free(tv__tvraw(a)),(void*)0) : (void*)0)
+#define tvpush(a,v)                 (tv__tvmaybegrow(a,1), (a)[tv__tvn(a)++] = (v))
+#define tvpop(a)                    (((tv__tvn(a) > 0)?((void)0):error("assert")), tv__tvn(a)-=1)
+#define tvsize(a)                   ((a) ? tv__tvn(a) : 0)
+#define tvadd(a,n)                  (tv__tvmaybegrow(a,n), tv__tvn(a)+=(n), &(a)[tv__tvn(a)-(n)])
+#define tvlast(a)                   ((a)[tv__tvn(a)-1])
+#define tvindexofnp(a,i,n,psize)    (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
+#define tvindexof(a,i)              ((a) ? (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),tv__tvn(a),sizeof(*(a)))) : -1)
+#define tvcontainsnp(a,i,n,psize)   ((a) ? (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
+#define tvcontainsp(a,i,psize)      (tvcontainsnp((a),i,tv__tvn(a),psize))
 #define tvcontainsn(a,i,n)          ((a) ? (tvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
-#define tvcontainsn_nonnull(a,i,n)  (tv__zvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,sizeof(*(a)))!=-1) /* workaround for stupid warning */
+#define tvcontainsn_nonnull(a,i,n)  (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,sizeof(*(a)))!=-1) /* workaround for stupid warning */
 #define tvcontains(a,i)             ((a) ? (tvcontainsp((a),i,sizeof(*(a)))) : 0)
 
-#define tv__zvraw(a) ((int *) (a) - 2)
-#define tv__zvm(a)   tv__zvraw(a)[0]
-#define tv__zvn(a)   tv__zvraw(a)[1]
+#define tv__tvraw(a) ((int *) (a) - 2)
+#define tv__tvm(a)   tv__tvraw(a)[0]
+#define tv__tvn(a)   tv__tvraw(a)[1]
 
-#define tv__zvneedgrow(a,n)  ((a)==0 || tv__zvn(a)+n >= tv__zvm(a))
-#define tv__zvmaybegrow(a,n) (tv__zvneedgrow(a,(n)) ? tv__zvgrow(a,n) : 0)
-#define tv__zvgrow(a,n)  tv__zvgrowf((void **) &(a), (n), sizeof(*(a)))
+#define tv__tvneedgrow(a,n)  ((a)==0 || tv__tvn(a)+n >= tv__tvm(a))
+#define tv__tvmaybegrow(a,n) (tv__tvneedgrow(a,(n)) ? tv__tvgrow(a,n) : 0)
+#define tv__tvgrow(a,n)  tv__tvgrowf((void **) &(a), (n), sizeof(*(a)))
 
-static void tv__zvgrowf(void **arr, int increment, int itemsize)
+static void tv__tvgrowf(void **arr, int increment, int itemsize)
 {
-    int m = *arr ? 2*tv__zvm(*arr)+increment : increment+1;
-    void *p = realloc(*arr ? tv__zvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
+    int m = *arr ? 2*tv__tvm(*arr)+increment : increment+1;
+    void *p = realloc(*arr ? tv__tvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
     if (p) {
         if (!*arr) ((int *) p)[1] = 0;
         *arr = (void *) ((int *) p + 2);
-        tv__zvm(*arr) = m;
+        tv__tvm(*arr) = m;
     }
 }
-static int tv__zvfind(char* arr, char* find, int itemsize, int n, int partialsize)
+static int tv__tvfind(char* arr, char* find, int itemsize, int n, int partialsize)
 {
     int i;
     for (i = 0; i < n; ++i)
@@ -485,6 +487,8 @@ enum { V_TEMP=0x1000, V_ADDR=0x2000, V_LOCAL=0x4000, V_FUNC=0x8000, V_IMMED=0x10
        V_REG_ANY=V_REG_RAX | V_REG_RCX | V_REG_RDX | V_REG_R8 | V_REG_R9, /* all volatile for all abis */
        V_REG_FIRST = V_REG_RAX, V_REG_LAST = V_REG_R11,
 };
+
+typedef long long zword;
 
 /* bah. asshats used different abis for x64. */
 static int funcArgRegs[] = {
@@ -707,6 +711,7 @@ static void i_extern(Token* tok)
 {
     /* note, tok->data.str is already interned */
     void *p = C.externLookup(tok->data.str);
+    if (!p) p = stdlibLookup(tok->data.str);
     if (!p) error("'%s' not found", tok->data.str);
     if (tvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
     tvpush(C.externnames, tok->data.str);
@@ -885,7 +890,7 @@ static int genlocal()
     char buf[128], *name;
     sprintf(buf, "$loc%d", count++);
     name = strintern(buf);
-    if (!tvcontains(C.locals, name)) { tvpush(C.locals, name); tvpush(C.localisptr, 0); }
+    if (!tvcontains(C.locals, name)) tvpush(C.locals, name);
     return tvindexof(C.locals, name);
 }
 
@@ -1170,7 +1175,6 @@ static void funcdef()
         char **argnames, *fname;
         SKIP(KW(def));
         tvfree(C.locals);
-        tvfree(C.localisptr);
         fname = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
@@ -1191,6 +1195,26 @@ static void fileinput()
         else funcdef();
     }
     SKIP(T_END);
+}
+
+/*
+ * builtin functions
+ */
+
+static void zlistPush(zword** list, zword i) { tvpush(*list, i); }
+
+struct NamePtrPair { char *name; void *func; };
+static struct NamePtrPair stdlibFuncs[] = {
+    { "list_push", zlistPush },
+    { NULL, NULL },
+};
+static void *stdlibLookup(char *name)
+{
+    struct NamePtrPair *p = stdlibFuncs;
+    for (; p->name; ++p)
+        if (strcmp(p->name, name) == 0)
+            return p->func;
+    return NULL;
 }
 
 /*
@@ -1238,7 +1262,6 @@ int twokRun(char *code, void *(*externLookup)(char *name))
     tvfree(C.vst);
     tvfree(C.instrs);
     tvfree(C.locals);
-    tvfree(C.localisptr);
     for (i = 0; i < tvsize(C.strs); ++i) free(C.strs[i]);
     tvfree(C.strs);
     tvfree(C.funcnames); tvfree(C.funcaddrs);
