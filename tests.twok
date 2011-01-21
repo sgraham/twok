@@ -399,6 +399,18 @@ def __main__():
     L = 0
     return stuff(@L, L)
 
+### 2 basic list
+# todo; need to remove these
+extern list_push
+extern len
+extern list_free
+def __main__():
+    L = 0
+    list_push(@L, 1)
+    list_push(@L, 2)
+    ret = len(L)
+    list_free(L)
+    return ret
 
 ### 1 DISABLED pointers 2
 def __main__():

@@ -488,7 +488,7 @@ enum { V_TEMP=0x1000, V_ISADDR=0x2000, V_LOCAL=0x4000, V_FUNC=0x8000, V_IMMED=0x
        V_REG_FIRST = V_REG_RAX, V_REG_LAST = V_REG_R11,
 };
 
-typedef long long zword;
+typedef long long tword;
 
 /* bah. asshats used different abis for x64. */
 static int funcArgRegs[] = {
@@ -1198,11 +1198,15 @@ static void fileinput()
  * builtin functions
  */
 
-static void zlistPush(zword** list, zword i) { tvpush(*list, i); }
+static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
+static int tlistLen(tword* L) { return tvsize(L); }
+static void tlistFree(tword* L) { tvfree(L); }
 
 struct NamePtrPair { char *name; void *func; };
 static struct NamePtrPair stdlibFuncs[] = {
-    { "list_push", zlistPush },
+    { "list_push", tlistPush },
+    { "len", tlistLen },
+    { "list_free", tlistFree },
     { NULL, NULL },
 };
 static void *stdlibLookup(char *name)
