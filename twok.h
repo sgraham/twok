@@ -25,59 +25,60 @@ ABOUT:
 
 TODO:
 
-    lists
-        L = []
-        push(L, 4)
-        push(L, 3)
-        x = pop(L)
-    [1,2,3,...] and "qwerty" construct lists.
-    
-    the value stored in L points to a word which points to the vector. this is
-    done so that push(L, ...) can be call-by-value, rather than having to
-    either make all calls require a token to indicate passing the address or
-    to require function type annotation to indicate the address should be
-    passed rather than the value.
+        lists
+            L = []
+            push(L, 4)
+            push(L, 3)
+            x = pop(L)
+        [1,2,3,...] and "qwerty" construct lists.
+        
+        the value stored in L points to a word which points to the vector. this is
+        done so that push(L, ...) can be call-by-value, rather than having to
+        either make all calls require a token to indicate passing the address or
+        to require function type annotation to indicate the address should be
+        passed rather than the value.
 
-    hmm, that works when passed to C, but what do we do in-language? need to
-    have dereference operations. possibly:
-        L[0]
-        *(L)
-        *(L+1)
-        L->1
-        L.1
-        L:1
-        L@1
-        @L
-    . is nice if we add some simple 'structure' definitions and allow defining x === 0
-    for L.x === L.0, but only good for lists, not plain pointers
+        hmm, that works when passed to C, but what do we do in-language? need to
+        have dereference operations. possibly:
+            L[0]
+            *(L)
+            *(L+1)
+            L->1
+            L.1
+            L:1
+            L@1
+            @L
+        . is nice if we add some simple 'structure' definitions and allow defining x === 0
+        for L.x === L.0, but only good for lists, not plain pointers
 
-    @L is highlighted as a decorator in python. perhaps good as address-of?
-    other possibilities $ % & ^ ` ? !
-    -- either @ or &
+        @L is highlighted as a decorator in python. perhaps good as address-of?
+        other possibilities $ % & ^ ` ? !
+        -- either @ or &
 
-    greenspun ourselves some macros to make push nicer:
+        greenspun ourselves some macros to make push nicer:
 
-    mac push(L, i):
-        return `list_push(@%(L), %(i))`
+        mac push(L, i):
+            return `list_push(@%(L), %(i))`
 
-    push(L, 1) --> list_push(@L, 1)
-
-
-    mac push_up_to(L, i):
-        for j in range(i):
-            list_push(@%(L), %(i))
-
-    $0-$9 are the arguments in () as a call. $$ is the suite after a :
-    some sort of tokenization location saving/popping to do substitution
-    how does indent/dedent work?
-    -- just do version without blocks for now, it can run some code that
-    generates some more code. `` is like 
+        push(L, 1) --> list_push(@L, 1)
 
 
-    mempush/pop for 'gc'
-    @var and free func for manual memory
-    uninit var tracking (make it optional?)
+        mac push_up_to(L, i):
+            for j in range(i):
+                list_push(@%(L), %(i))
+
+        $0-$9 are the arguments in () as a call. $$ is the suite after a :
+        some sort of tokenization location saving/popping to do substitution
+        how does indent/dedent work?
+        -- just do version without blocks for now, it can run some code that
+        generates some more code. `` is like 
+
+    strings (just different syntax for []) + a "pack" for passing to C
+    for x in blah
+    range func
+    print func
     arm backend (on android ndk maybe)
+    uninit var tracking (maybe optional?)
     more tests for various math/expr ops
 
     dupe getReg calls in g_rval
@@ -173,6 +174,14 @@ NOTES: (mostly internal mumbling)
         - rbp-N+8 is local 1
         ...
     
+    mempush/pop for 'gc'
+
+        very simple gc, while allowing for pointer futzing.
+        mempush() marks a spot in a bump allocator, mempop() returns there.
+        in debug, memset everything that's free'd to track errors down
+        basically 2 stacks, the call stack and the alloc stack
+        manual malloc/free tbd, not sure of a good way to hook up
+        automatically allocating things to use manual instead (i.e. lists)
 
 */
 
