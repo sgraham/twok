@@ -275,36 +275,57 @@ static char *tbap = tba_heap;
 /* stored as size_t at -1 of returned pointer. if realloc is smaller,
  * return same, pointer, if it's bigger then always copy to end */
 #define tba_blocksize(p) (*(((size_t*)(p))-1))
-void *tba_realloc(void *ptr, size_t size)
+/* dumb validate mem, walks heap to make sure sizes look reasonable */
+/*
+static void tba_check_sizes()
+{
+    char *p = &tba_heap[0] + sizeof(size_t);
+    for (;;)
+    {
+        if (p >= tbap) break;
+        size_t size = tba_blocksize(p);
+        if (size >= 10000)
+            error("too big? %p", p);
+        p += size + sizeof(size_t);
+    }
+}
+*/
+static void *tba_realloc(void *ptr, size_t size)
 {
     char *ret = tbap + sizeof(size_t);
 
-    size = (size + sizeof(size_t) - 1) & (~(sizeof(size_t) - 1));
-
     /* if there was a previous block, and we're not freeing, and it's smaller,
      * just return, there's nothing to do */
-    if (ptr != NULL && size > 0 && tba_blocksize(ptr) <= size) return ptr;
+    if (ptr != NULL && size > 0 && tba_blocksize(ptr) >= size) return ptr;
 
     /* we don't actually do frees */
     if (size == 0) return NULL;
 
     /* now we know it's growing (possibly from null) */
 
+    /* align to word-sized */
+    size = (size + sizeof(size_t) - 1) & (~(sizeof(size_t) - 1));
+
     /* make sure we have enough space */
     if (tbap + size + sizeof(size_t) > &tba_heap[0] + (TWOK_HEAP_SIZE)) error("out of memory");
 
     /* store size of newly allocated block, and bump pointer */
-    *(size_t*)(ret - sizeof(size_t)) = size;
+    *(((size_t*)ret)-1) = size;
     tbap += size + sizeof(size_t);
 
+    /*
+    printf("allocating at %p, size %ld\n", ret, size);
+    if (ptr)
+        printf("  was at %p, size %ld\n", ptr, tba_blocksize(ptr));
+    printf(" tbap now %p\n", tbap);
+    */
     /* make a copy of the old data if there was any */
     if (ptr)
         memcpy(ret, ptr, tba_blocksize(ptr) < size ? tba_blocksize(ptr) : size);
 
     return ret;
 }
-void tba_free(void* p) { (void)p; }
-char *tba_strdup(char* in)
+static char *tba_strdup(char* in)
 {
     char* p = tba_realloc(0, strlen(in) + 1), *ret = p;
     while (*in) *p++ = *in++;
@@ -312,7 +333,7 @@ char *tba_strdup(char* in)
     return ret;
 }
 #define TWOK_FILL_MEM 1
-void tba_pushcheckpoint()
+static void tba_pushcheckpoint()
 {
     if (tba_stackidx >= tarrsize(tba_stack)) error("too many checkpoints");
     tba_stack[tba_stackidx++] = tbap;
@@ -320,7 +341,7 @@ void tba_pushcheckpoint()
     memset(tbap, 0xcc, TWOK_HEAP_SIZE - (tbap - &tba_heap[0]));
 #endif
 }
-void tba_popcheckpoint()
+static void tba_popcheckpoint()
 {
     if (tba_stackidx <= 0) error("checkpoint underflow");
     tbap = tba_stack[--tba_stackidx];
@@ -355,7 +376,7 @@ void tba_popcheckpoint()
 static void tv__tvgrowf(void **arr, int increment, int itemsize)
 {
     int m = *arr ? 2*tv__tvm(*arr)+increment : increment+1;
-    void *p = realloc(*arr ? tv__tvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
+    void *p = tba_realloc(*arr ? tv__tvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
     if (p) {
         if (!*arr) ((int *) p)[1] = 0;
         *arr = (void *) ((int *) p + 2);
