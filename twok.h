@@ -486,10 +486,8 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
 
         if (*pos == '#' || *pos == '\r' || *pos == '\n')
         {
-            if (*pos == '#')
-                while (*pos++ != '\n') {}
-            else
-                ++pos;
+            if (*pos == '#') while (*pos++ != '\n') {}
+            else ++pos;
         }
         while (column < tvlast(indents))
         {
@@ -701,10 +699,7 @@ static int g_lval(int valid)
             outnum32(val * REG_SIZE);
         }
     }
-    else
-    {
-        error("expecting lval");
-    }
+    else error("expecting lval");
     tvpop(C.vst);
     return reg;
 }
@@ -747,15 +742,11 @@ static int g_rval(int valid)
         int reg = getReg(valid);
         g_loadspill(reg, (int)val);
     }
-    else
-    {
-        error("internal error, unexpected stack state");
-    }
+    else error("internal error, unexpected stack state");
     tvpop(C.vst);
     return reg;
 }
 
-static void i_const(long long v) { VAL(V_IMMED, v); }
 static void i_func(char *name, char **paramnames)
 {
     int i;
@@ -785,14 +776,14 @@ static void i_func(char *name, char **paramnames)
     }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
-static void i_extern(Token* tok)
+static void i_extern(char* name)
 {
-    /* note, tok->data.str is already interned */
-    void *p = C.externLookup(tok->data.str);
-    if (!p) p = stdlibLookup(tok->data.str);
-    if (!p) error("'%s' not found", tok->data.str);
-    if (tvcontains(C.externnames, tok->data.str)) return; /* not an error, just ignore. */
-    tvpush(C.externnames, tok->data.str);
+    name = strintern(name);
+    void *p = C.externLookup(name);
+    if (!p) p = stdlibLookup(name);
+    if (!p) error("'%s' not found", name);
+    if (tvcontains(C.externnames, name)) return; /* not an error, just ignore. */
+    tvpush(C.externnames, name);
     tvpush(C.externaddrs, p);
 }
 
@@ -981,28 +972,40 @@ static int atom()
     }
     else if (CURTOKt == '[')
     {
+        int initialCount = tvsize(C.vst);
+        NEXT();
         or_test();
         for (;;)
         {
             if (CURTOKt == ']')
             {
-                printf("WEE\n");
-                /* pop all */
+                char *listpush = strintern("list_push");
+                int i, numElems = tvsize(C.vst) - initialCount, pushidx = tvindexof(C.externnames, listpush), listtmp = genlocal();
+                NEXT();
+                VAL(V_IMMED, 0);
+                i_storelocal(listtmp);
+                for (i = 0; i < numElems; ++i)
+                {
+                                                            /* stack: V */
+                    VAL(V_IMMED, (unsigned long long) C.externaddrs[pushidx]);   /* stack: V, list_push */
+                    g_swap();                               /* stack: list_push, V */
+                    i_addrlocal(listtmp, 1);                /* stack: list_push, V, @L */
+                    g_swap();                               /* stack: list_push, @L, V */
+                    i_call(2);
+                }
+                i_addrlocal(listtmp, 0);
             }
             else if (CURTOKt == ',')
             {
                 NEXT();
                 or_test();
             }
-            else
-            {
-                break;
-            }
+            else break;
         }
     }
     else if (CURTOKt == T_NUM)
     {
-        i_const(CURTOK->data.tokn);
+        VAL(V_IMMED, CURTOK->data.tokn);
         NEXT();
         return 1;
     }
@@ -1015,7 +1018,7 @@ static int atom()
             NEXT();
         }
         if ((i = tvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i, isaddrof);
-        else if ((i = tvindexof(C.externnames, CURTOK->data.str)) != -1) i_const((unsigned long long)C.externaddrs[i]);
+        else if ((i = tvindexof(C.externnames, CURTOK->data.str)) != -1) VAL(V_IMMED, (unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) VAL(V_FUNC, funcidx(CURTOK->data.str));
         else
         {
@@ -1088,10 +1091,7 @@ static void factor()
         factor();
         i_mathunary(op);
     }
-    else
-    {
-        atomplus();
-    }
+    else atomplus();
 }
 
 #define EXPRP(name, sub, tok0, tok1, tok2)                              \
@@ -1135,8 +1135,7 @@ static void not_test()
         VAL(V_IMMED, 0);
         i_cmp(KW(==));
     }
-    else
-        comparison();
+    else comparison();
 }
 
 #define BOOLOP(name, sub, kw, cond)             \
@@ -1183,7 +1182,7 @@ static void stmt()
     if (CURTOKt == KW(return))
     {
         SKIP(KW(return));
-        if (CURTOKt == T_NL || CURTOKt == T_DEDENT) i_const(20710);
+        if (CURTOKt == T_NL || CURTOKt == T_DEDENT) VAL(V_IMMED, 20710);
         else or_test();
         i_ret();
         SKIP(T_NL);
@@ -1247,7 +1246,7 @@ static void funcdef()
     if (CURTOKt == KW(extern))
     {
         SKIP(KW(extern));
-        i_extern(CURTOK);
+        i_extern(CURTOK->data.str);
         NEXT();
         SKIP(T_NL);
     }
@@ -1300,6 +1299,11 @@ static void *stdlibLookup(char *name)
             return p->func;
     return NULL;
 }
+static void exportStdlib()
+{
+    struct NamePtrPair *p = stdlibFuncs;
+    for (; p->name; ++p) i_extern(p->name);
+}
 
 /*
  * main api entry point
@@ -1315,6 +1319,7 @@ int twokRun(char *code, void *(*externLookup)(char *name))
     if (setjmp(C.errBuf) == 0)
     {
         tba_pushcheckpoint();
+        exportStdlib();
         tokenize();
         /* dump tokens generated from stream */
 #if 0
