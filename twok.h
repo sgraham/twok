@@ -979,6 +979,7 @@ static int atom()
         {
             if (CURTOKt == ']')
             {
+                /* todo; reversed i think */
                 char *listpush = strintern("list_push");
                 int i, numElems = tvsize(C.vst) - initialCount, pushidx = tvindexof(C.externnames, listpush), listtmp = genlocal();
                 NEXT();
