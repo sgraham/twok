@@ -265,8 +265,8 @@ static void error(char *fmt, ...);
  */
 
 /* bump allocator with save/restore checkpoint stack */
-/*static char *tba_stack[16];
-static int tba_stackidx;*/
+static char *tba_stack[16];
+static int tba_stackidx;
 #ifndef TWOK_HEAP_SIZE
     #define TWOK_HEAP_SIZE (1<<20)
 #endif
@@ -279,7 +279,7 @@ void *tba_realloc(void *ptr, size_t size)
 {
     char *ret = tbap + sizeof(size_t);
 
-    size = (size + sizeof(size_t)) & (~sizeof(size_t));
+    size = (size + sizeof(size_t) - 1) & (~(sizeof(size_t) - 1));
 
     /* if there was a previous block, and we're not freeing, and it's smaller,
      * just return, there's nothing to do */
@@ -308,7 +308,25 @@ char *tba_strdup(char* in)
 {
     char* p = tba_realloc(0, strlen(in) + 1), *ret = p;
     while (*in) *p++ = *in++;
+    *p = 0;
     return ret;
+}
+#define TWOK_FILL_MEM 1
+void tba_pushcheckpoint()
+{
+    if (tba_stackidx >= tarrsize(tba_stack)) error("too many checkpoints");
+    tba_stack[tba_stackidx++] = tbap;
+#ifdef TWOK_FILL_MEM
+    memset(tbap, 0xcc, TWOK_HEAP_SIZE - (tbap - &tba_heap[0]));
+#endif
+}
+void tba_popcheckpoint()
+{
+    if (tba_stackidx <= 0) error("checkpoint underflow");
+    tbap = tba_stack[--tba_stackidx];
+#ifdef TWOK_FILL_MEM
+    memset(tbap, 0xcc, TWOK_HEAP_SIZE - (tbap - &tba_heap[0]));
+#endif
 }
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
@@ -1267,11 +1285,13 @@ int twokRun(char *code, void *(*externLookup)(char *name))
 {
     int ret, allocSize, entryidx;
     memset(&C, 0, sizeof(C));
+    memset(&NC, 0, sizeof(NC));
     C.input = code;
     C.externLookup = externLookup;
     allocSize = 1<<17;
     if (setjmp(C.errBuf) == 0)
     {
+        tba_pushcheckpoint();
         tokenize();
         /* dump tokens generated from stream */
 #if 0
@@ -1298,9 +1318,16 @@ int twokRun(char *code, void *(*externLookup)(char *name))
 
         entryidx = funcidx("__main__");
         if (entryidx == -1) error("no entry point '__main__'");
+        tba_popcheckpoint();
+        tba_pushcheckpoint();
         ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
+        tba_popcheckpoint();
     }
-    else ret = -1;
+    else
+    {
+        tba_popcheckpoint();
+        ret = -1;
+    }
     twok_freeExec(C.codeseg, allocSize);
     return ret;
 }
