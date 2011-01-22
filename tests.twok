@@ -400,32 +400,40 @@ def __main__():
     return stuff(@L, L)
 
 ### 2 basic list
-# todo; need to remove these
-extern list_push
-extern len
 def __main__():
     L = 0
     list_push(@L, 1)
     list_push(@L, 2)
     return len(L)
 
-### 1 DISABLED pointers 2
-def __main__():
-    L = []
-    push(@L, 5)
-
-### 0 DISABLED simple mempush/pop
+### 0 simple mempush/pop
 def __main__():
     mempush()
     mempop()
 
-### 0 DISABLED simple mempush/pop 2
+### 0 simple mempush/pop 2
 def __main__():
     mempush()
     L = 0
     list_push(@L, 1)
     list_push(@L, 2)
     mempop()
+
+### 1 list syntax 0
+def __main__():
+    L = []
+    list_push(@L, 5)
+    return len(L)
+
+### 1 list syntax 0
+def __main__():
+    L = [888]
+    return len(L)
+
+### 3 list syntax 0
+def __main__():
+    L = [777, 888, 999]
+    return len(L)
 
 ### 99999 END
 # vim: set ft=python:
