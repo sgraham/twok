@@ -414,6 +414,18 @@ def __main__():
     L = []
     push(@L, 5)
 
+### 0 DISABLED simple mempush/pop
+def __main__():
+    mempush()
+    mempop()
+
+### 0 DISABLED simple mempush/pop 2
+def __main__():
+    mempush()
+    L = 0
+    list_push(@L, 1)
+    list_push(@L, 2)
+    mempop()
 
 ### 99999 END
 # vim: set ft=python:
