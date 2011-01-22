@@ -212,7 +212,6 @@ extern int twokRun(char *code, void *(*externLookup)(char *name));
         static void twok_freeExec(void* p, int size) { VirtualFree(p, size, MEM_RELEASE); }
         #pragma intrinsic(_BitScanForward)
         static int twok_CTZ(int x) { unsigned long ret; _BitScanForward(&ret, x); return ret; }
-        #define strdup _strdup
         #define strtoll _strtoi64
     #endif
 #endif
@@ -280,6 +279,8 @@ void *tba_realloc(void *ptr, size_t size)
 {
     char *ret = tbap + sizeof(size_t);
 
+    size = (size + sizeof(size_t)) & (~sizeof(size_t));
+
     /* if there was a previous block, and we're not freeing, and it's smaller,
      * just return, there's nothing to do */
     if (ptr != NULL && size > 0 && tba_blocksize(ptr) <= size) return ptr;
@@ -303,9 +304,15 @@ void *tba_realloc(void *ptr, size_t size)
     return ret;
 }
 void tba_free(void* p) { (void)p; }
+char *tba_strdup(char* in)
+{
+    char* p = tba_realloc(0, strlen(in) + 1), *ret = p;
+    while (*in) *p++ = *in++;
+    return ret;
+}
 
 /* simple vector based on http://nothings.org/stb/stretchy_buffer.txt */
-#define tvfree(a)                   ((a) ? (free(tv__tvraw(a)),(void*)0) : (void*)0)
+#define tvfree(a)                   ((a) ? (tba_free(tv__tvraw(a)),(void*)0) : (void*)0)
 #define tvpush(a,v)                 (tv__tvmaybegrow(a,1), (a)[tv__tvn(a)++] = (v))
 #define tvpop(a)                    (((tv__tvn(a) > 0)?((void)0):error("assert")), tv__tvn(a)-=1)
 #define tvsize(a)                   ((a) ? tv__tvn(a) : 0)
@@ -406,7 +413,7 @@ char* strintern(char* s)
     for (i = 0; i < tvsize(C.strs); ++i)
         if (strcmp(s, C.strs[i]) == 0)
             return C.strs[i];
-    tvpush(C.strs, strdup(s));
+    tvpush(C.strs, tba_strdup(s));
     return tvlast(C.strs);
 }
 enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
@@ -435,8 +442,6 @@ static void tokenize()
 donestream: for (i = 1; i < tvsize(indents); ++i)
                 TOK(T_DEDENT);
             TOK(T_END);
-            tvfree(indents);
-            tvfree(ident);
             return;
         }
 
@@ -463,7 +468,7 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
         {
             while (*pos == ' ') ++pos;
             startpos = pos;
-            ident = tvfree(ident);
+            ident = NULL;
             tok = *pos;
             if (isid(*pos))
             {
@@ -483,7 +488,7 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
                     tok = T_IDENT;
                     if (strstr(KWS, tempident)) tok = (int)(strstr(KWS, tempident) + 1 /*space*/ - KWS + T_KW);
                     TOKI(tok, ident);
-                    tempident = tvfree(tempident);
+                    tempident = NULL;
                 }
             }
             else if (*pos == '#')
@@ -1211,7 +1216,7 @@ static void funcdef()
     {
         char **argnames, *fname;
         SKIP(KW(def));
-        C.locals = tvfree(C.locals);
+        C.locals = NULL;
         fname = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
@@ -1220,7 +1225,6 @@ static void funcdef()
         SKIP(')');
         suite();
         i_endfunc();
-        tvfree(argnames);
     }
 }
 
@@ -1240,13 +1244,11 @@ static void fileinput()
 
 static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
 static int tlistLen(tword* L) { return tvsize(L); }
-static void tlistFree(tword* L) { tvfree(L); }
 
 struct NamePtrPair { char *name; void *func; };
 static struct NamePtrPair stdlibFuncs[] = {
     { "list_push", tlistPush },
     { "len", tlistLen },
-    { "list_free", tlistFree },
     { NULL, NULL },
 };
 static void *stdlibLookup(char *name)
@@ -1263,7 +1265,7 @@ static void *stdlibLookup(char *name)
  */
 int twokRun(char *code, void *(*externLookup)(char *name))
 {
-    int ret, allocSize, i, entryidx;
+    int ret, allocSize, entryidx;
     memset(&C, 0, sizeof(C));
     C.input = code;
     C.externLookup = externLookup;
@@ -1299,14 +1301,6 @@ int twokRun(char *code, void *(*externLookup)(char *name))
         ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
     }
     else ret = -1;
-    tvfree(C.tokens);
-    tvfree(C.vst);
-    tvfree(C.instrs);
-    tvfree(C.locals);
-    for (i = 0; i < tvsize(C.strs); ++i) free(C.strs[i]);
-    tvfree(C.strs);
-    tvfree(C.funcnames); tvfree(C.funcaddrs);
-    tvfree(C.externnames); tvfree(C.externaddrs);
     twok_freeExec(C.codeseg, allocSize);
     return ret;
 }
