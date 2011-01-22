@@ -1288,6 +1288,8 @@ struct NamePtrPair { char *name; void *func; };
 static struct NamePtrPair stdlibFuncs[] = {
     { "list_push", tlistPush },
     { "len", tlistLen },
+    { "mempush", tba_pushcheckpoint },
+    { "mempop", tba_popcheckpoint },
     { NULL, NULL },
 };
 static void *stdlibLookup(char *name)
@@ -1340,9 +1342,7 @@ int twokRun(char *code, void *(*externLookup)(char *name))
         entryidx = funcidx("__main__");
         if (entryidx == -1) error("no entry point '__main__'");
         tba_popcheckpoint();
-        tba_pushcheckpoint();
         ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
-        tba_popcheckpoint();
     }
     else
     {
