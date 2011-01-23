@@ -442,14 +442,46 @@ def __main__():
     x = 14
     return functest(x-1)
 
-### 165580141 DISABLED fib(40)
+### 233 fib(13)
 def fib(n):
-    if n <= 1:
+    if n <= 0:
+        return 0
+    elif n <= 1:
+        return 1
+    else:
+        return fib(n-1) + fib(n-2)
+def __main__():
+    return fib(13)
+
+### 102334155 DISABLED fib(40)
+def fib(n):
+    if n <= 0:
+        return 0
+    elif n <= 1:
         return 1
     else:
         return fib(n-1) + fib(n-2)
 def __main__():
     return fib(40)
+
+### 6 std range
+def __main__():
+    return len(range(6))
+
+### 4 list []
+def __main__():
+    return range(6)[4]
+
+### -1 expecting subscript
+def __main__():
+    return range(6)[]
+
+### 15 DISABLED simple for
+def __main__():
+    y = 0
+    for x in range(6):
+        y = y + x
+    return y
 
 ### 99999 END
 # vim: set ft=python:
