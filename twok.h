@@ -253,7 +253,7 @@ typedef struct Value {
 
 typedef struct Context {
     Token *tokens;
-    int curtok, irpos;
+    int curtok;
     char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs;
     void *(*externLookup)(char *name);
     Value *instrs, *vst;
@@ -299,8 +299,7 @@ static void tba_check_sizes()
     }
 }
 */
-static void *tba_realloc(void *ptr, size_t size)
-{
+static void *tba_realloc(void *ptr, size_t size) {
     char *ret = tbap + sizeof(size_t);
 
     /* if there was a previous block, and we're not freeing, and it's smaller,
@@ -334,24 +333,21 @@ static void *tba_realloc(void *ptr, size_t size)
 
     return ret;
 }
-static char *tba_strdup(char* in)
-{
+static char *tba_strdup(char* in) {
     char* p = tba_realloc(0, strlen(in) + 1), *ret = p;
     while (*in) *p++ = *in++;
     *p = 0;
     return ret;
 }
 #define TWOK_FILL_MEM 1
-static void tba_pushcheckpoint()
-{
+static void tba_pushcheckpoint() {
     if (tba_stackidx >= tarrsize(tba_stack)) error("too many checkpoints");
     tba_stack[tba_stackidx++] = tbap;
 #ifdef TWOK_FILL_MEM
     memset(tbap, 0xcc, TWOK_HEAP_SIZE - (tbap - &tba_heap[0]));
 #endif
 }
-static void tba_popcheckpoint()
-{
+static void tba_popcheckpoint() {
     if (tba_stackidx <= 0) error("checkpoint underflow");
     tbap = tba_stack[--tba_stackidx];
 #ifdef TWOK_FILL_MEM
@@ -382,8 +378,7 @@ static void tba_popcheckpoint()
 #define tv__tvmaybegrow(a,n) (tv__tvneedgrow(a,(n)) ? tv__tvgrow(a,n) : 0)
 #define tv__tvgrow(a,n)  tv__tvgrowf((void **) &(a), (n), sizeof(*(a)))
 
-static void tv__tvgrowf(void **arr, int increment, int itemsize)
-{
+static void tv__tvgrowf(void **arr, int increment, int itemsize) {
     int m = *arr ? 2*tv__tvm(*arr)+increment : increment+1;
     void *p = tba_realloc(*arr ? tv__tvraw(*arr) : 0, itemsize * m + sizeof(int)*2);
     if (p) {
@@ -392,8 +387,7 @@ static void tv__tvgrowf(void **arr, int increment, int itemsize)
         tv__tvm(*arr) = m;
     }
 }
-static int tv__tvfind(char* arr, char* find, int itemsize, int n, int partialsize)
-{
+static int tv__tvfind(char* arr, char* find, int itemsize, int n, int partialsize) {
     int i;
     for (i = 0; i < n; ++i)
         if (memcmp(&arr[i*itemsize], find, partialsize) == 0)
@@ -405,16 +399,13 @@ static int tv__tvfind(char* arr, char* find, int itemsize, int n, int partialsiz
 #define CURTOK (&C.tokens[C.curtok])
 #define CURTOKt (CURTOK->type)
 
-static void geterrpos(int offset, int* line, int* col, char** linetext)
-{
+static void geterrpos(int offset, int* line, int* col, char** linetext) {
     char* cur = C.input;
     *line = 1; *col = 1;
     *linetext = cur;
-    while (--offset >= 0)
-    {
+    while (--offset >= 0) {
         *col += 1;
-        if (*cur++ == '\n')
-        {
+        if (*cur++ == '\n') {
             *linetext = cur;
             *line += 1;
             *col = 1;
@@ -423,16 +414,14 @@ static void geterrpos(int offset, int* line, int* col, char** linetext)
 }
 
 /* report error message and longjmp */
-static void error(char *fmt, ...)
-{
+static void error(char *fmt, ...) {
     va_list ap;
     int line, col;
     char* text, *eotext;
     char tmp[256];
 
     va_start(ap, fmt);
-    if (C.curtok < tvsize(C.tokens)) /* for errors after parse finished */
-    {
+    if (C.curtok < tvsize(C.tokens)) { /* for errors after parse finished */
         geterrpos(CURTOK->pos, &line, &col, &text);
         sprintf(C.errorText, "line %d, col %d:\n", line, col);
         eotext = text;
@@ -455,8 +444,7 @@ static void error(char *fmt, ...)
 /* todo; True, False, None? */
 static char KWS[] = " if elif else or for def return extern mod and not print pass << >> <= >= == != ";
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
-char* strintern(char* s)
-{
+char* strintern(char* s) {
     int i;
     for (i = 0; i < tvsize(C.strs); ++i)
         if (strcmp(s, C.strs[i]) == 0)
@@ -470,8 +458,7 @@ enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT 
 #define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input), { 0 } }; _.data.tokn=v; tvpush(C.tokens, _); } while(0)
 #define isid(ch) (isalnum(ch) || ch == '_')
 
-static void tokenize()
-{
+static void tokenize() {
     char *pos = C.input, *startpos;
     int i, tok, column;
     int *indents = 0;
@@ -479,52 +466,44 @@ static void tokenize()
 
     tvpush(indents, 0);
 
-    for (;;)
-    {
+    for (;;) {
         column = 0;
         while (*pos == ' ') { pos++; column++; }
         startpos = pos;
 
-        if (*pos == 0)
-        {
+        if (*pos == 0) {
 donestream: for (i = 1; i < tvsize(indents); ++i)
                 TOK(T_DEDENT);
             TOK(T_END);
             return;
         }
 
-        if (*pos == '#' || *pos == '\r' || *pos == '\n')
-        {
+        if (*pos == '#' || *pos == '\r' || *pos == '\n') {
             if (*pos == '#') while (*pos++ != '\n') {}
             else ++pos;
         }
-        while (column < tvlast(indents))
-        {
+        while (column < tvlast(indents)) {
             if (!tvcontains(indents, column)) error("unindent does not match any outer indentation level");
             tvpop(indents);
             TOK(T_DEDENT);
         }
-        if (column > tvlast(indents))
-        {
+        if (column > tvlast(indents)) {
             tvpush(indents, column);
             TOK(T_INDENT);
         }
 
-        while (*pos != '\n')
-        {
+        while (*pos != '\n') {
             while (*pos == ' ') ++pos;
             startpos = pos;
             ident = NULL;
             tok = *pos;
-            if (isid(*pos))
-            {
+            if (isid(*pos)) {
                 while (isid(*pos))
                     tvpush(ident, *pos++);
                 tvpush(ident, 0);
                 if (isdigit(tok))
                     TOKN(T_NUM, strtoll(ident, 0, 0));
-                else
-                {
+                else {
                     /* oops, need to search with space before/after so "i"
                      * isn't found in "if" and "x" isn't found in "extern". */
                     tvpush(tempident, ' ');
@@ -536,14 +515,10 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
                     TOKI(tok, ident);
                     tempident = NULL;
                 }
-            }
-            else if (*pos == '#')
-            {
+            } else if (*pos == '#') {
                 while (*pos != '\n' && *pos != 0) ++pos;
                 break;
-            }
-            else
-            {
+            } else {
                 char tmp[3] = { 0, 0, 0 };
                 if (!*pos) goto donestream;
                 tmp[0] = *pos++;
@@ -612,8 +587,7 @@ static NativeContext NC;
 #define get32(p) (*(int*)p)
 
 static char* functhunkaddr(long long idx) { return C.codesegend - (idx + 1) * FUNC_THUNK_SIZE; }
-static void addfunc(char* name, char* addr)
-{
+static void addfunc(char* name, char* addr) {
     char* p;
     if (tvcontains(C.funcnames, name)) error("%s already defined", name);
     tvpush(C.funcnames, name);
@@ -626,33 +600,28 @@ static void addfunc(char* name, char* addr)
 static int funcidx(char* name) { char* p = strintern(name); return tvindexof(C.funcnames, p); }
 
 /* store the given register (offset) into the given stack slot */
-static void g_storespill(int reg, int slot)
-{
+static void g_storespill(int reg, int slot) {
     lead(reg); ob(0x89); ob(0x85 + vreg_to_enc(reg));
     outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
 /* load spill # slot into reg */
-static void g_loadspill(int reg, int slot)
-{
+static void g_loadspill(int reg, int slot) {
     lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg));
     outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
-static void g_swap()
-{
+static void g_swap() {
     Value tmp = tvlast(C.vst);
     tvlast(C.vst) = C.vst[tvsize(C.vst) - 2];
     C.vst[tvsize(C.vst) - 2] = tmp;
 }
 
-static int getReg(int valid)
-{
+static int getReg(int valid) {
     int i, j, reg;
 
     /* figure out if it's currently in use */
-    for (i = V_REG_FIRST; i <= V_REG_LAST; i <<= 1)
-    {
+    for (i = V_REG_FIRST; i <= V_REG_LAST; i <<= 1) {
         if ((i & valid) == 0) continue;
         for (j = 0; j < tvsize(C.vst); ++j)
             if ((C.vst[j].tag.type & i))
@@ -663,10 +632,8 @@ static int getReg(int valid)
     }
 
     /* otherwise, find the oldest in the class */
-    for (j = 0; j < tvsize(C.vst); ++j)
-    {
-        if ((C.vst[j].tag.type & valid))
-        {
+    for (j = 0; j < tvsize(C.vst); ++j) {
+        if ((C.vst[j].tag.type & valid)) {
             /* and a location to spill it to */
             for (i = 0; i < tarrsize(NC.spills); ++i)
                 if (!NC.spills[i]) break;
@@ -687,22 +654,17 @@ static int getReg(int valid)
     return -1;
 }
 
-static int g_lval(int valid)
-{
+static int g_lval(int valid) {
     int reg = 0, tag = tvlast(C.vst).tag.type;
     long long val = tvlast(C.vst).data.l;
-    if (tag & V_ISADDR)
-    {
+    if (tag & V_ISADDR) {
         if ((reg = (tag & V_REG_ANY))) { /* nothing, just pop and return reg */ }
-        else if (tag & V_IMMED)
-        {
+        else if (tag & V_IMMED) {
             /* mov Reg, const */
             reg = getReg(valid);
             lead(reg); ob(0xb8 + vreg_to_enc(reg));
             outnum64(val);
-        }
-        else if (tag & V_LOCAL)
-        {
+        } else if (tag & V_LOCAL) {
             reg = getReg(valid);
             lead(reg); ob(0x8d); ob(0x85 + vreg_to_enc(reg) * 8); /* lea rXx, [rbp - xxx] (long form) */
             outnum32(val * REG_SIZE);
@@ -713,41 +675,32 @@ static int g_lval(int valid)
     return reg;
 }
 
-static int g_rval(int valid)
-{
+static int g_rval(int valid) {
     int reg, reg2, tag = tvlast(C.vst).tag.type;
     long long val = tvlast(C.vst).data.l;
-    if (tag & V_IMMED)
-    {
+    if (tag & V_IMMED) {
         if (tag & V_WANTADDR) error("cannot take address of immediate");
         /* mov Reg, const */
         reg = getReg(valid);
         lead(reg); ob(0xb8 + vreg_to_enc(reg));
         outnum64(val);
-    }
-    else if (tag & V_LOCAL)
-    {
+    } else if (tag & V_LOCAL) {
         /* todo; uninit var; keep shadow stack of initialized flags, error on
          * read before write. need to figure out calling C lib */
         if (tag & V_WANTADDR) return g_lval(valid);
         reg = getReg(valid);
         lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 8); /* mov rXx, [rbp + xxx] (long form) */
         outnum32(val * REG_SIZE);
-    }
-    else if (tag & V_FUNC)
-    {
+    } else if (tag & V_FUNC) {
         reg = getReg(valid);
         lead(reg); ob(0xb8 + vreg_to_enc(reg)); outnum64(functhunkaddr(val)); /* mov rXx, functhunk */
     }
     else if ((reg = (tag & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
-    else if ((reg2 = (tag & V_REG_ANY)))
-    {
+    else if ((reg2 = (tag & V_REG_ANY))) {
         /* in a register, but not the one we need */
         int reg = getReg(valid);
         lead2(reg, reg2); ob(0x89); ob(0xc0 + vreg_to_enc(reg) + vreg_to_enc(reg2) * 8); /* mov rXx, rXx */
-    }
-    else if (tag & V_TEMP)
-    {
+    } else if (tag & V_TEMP) {
         int reg = getReg(valid);
         g_loadspill(reg, (int)val);
     }
@@ -768,15 +721,11 @@ static void i_func(char *name, char **paramnames)
     NC.paramnames = paramnames;
     /* copy args to shadow location, we put them in "upside down" from how
      * they are on the arg stack */
-    for (i = 0; i < tvsize(paramnames); ++i)
-    {
+    for (i = 0; i < tvsize(paramnames); ++i) {
         /* get either from reg, or from stack, depending on index and abi */
-        if (i >= tarrsize(funcArgRegs))
-        {
+        if (i >= tarrsize(funcArgRegs)) {
             ob(0x48); ob(0x8b); ob(0x85); outnum32(16+8*i); /* mov rax, [rbp + argoffset] */
-        }
-        else
-        {
+        } else {
             int reg = funcArgRegs[i];
             lead2(V_REG_RAX, reg); ob(0x89); ob(0xc0 + vreg_to_enc(V_REG_RAX) + vreg_to_enc(reg) * 8); /* mov rXx, rXx */
         }
@@ -785,8 +734,7 @@ static void i_func(char *name, char **paramnames)
     }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
-static void i_extern(char* name)
-{
+static void i_extern(char* name) {
     name = strintern(name);
     void *p = C.externLookup(name);
     if (!p) p = stdlibLookup(name);
@@ -797,14 +745,12 @@ static void i_extern(char* name)
 }
 
 static void i_ret() { g_rval(V_REG_RAX); ob(0xc9); /* leave */ ob(0xc3); /* ret */ }
-static void i_endfunc()
-{
+static void i_endfunc() {
     i_ret();
     put32(NC.numlocsp, (tvsize(C.locals)+1) * REG_SIZE + 256); /* todo; XXX hardcoded # spills */
 }
 
-static void i_cmp(int op)
-{
+static void i_cmp(int op) {
     int a, into;
     struct { char kw, cc; } cmpccs[] = {
         { '<', 0xc },
@@ -830,15 +776,11 @@ static void i_cmp(int op)
  * list to previous items that are going to jump to the same final location so
  * that when the jump target is reached we can fix them all up by walking the
  * list that we created. */
-static char* i_jmpc(int cond, char* prev)
-{
-    if (cond == J_UNCOND)
-    {
+static char* i_jmpc(int cond, char* prev) {
+    if (cond == J_UNCOND) {
         ob(0xe9);
         outnum32(prev ? prev - C.codeseg : 0);
-    }
-    else
-    {
+    } else {
         int reg = g_rval(V_REG_ANY);
         lead2(reg, reg); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
         ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
@@ -847,11 +789,9 @@ static char* i_jmpc(int cond, char* prev)
     return C.codep - 4;
 }
 
-static void i_label(char* p)
-{
+static void i_label(char* p) {
     char* to = C.codep;
-    while (p)
-    {
+    while (p) {
         char* tmp = get32(p) ? get32(p) + C.codeseg : 0; /* next value in the list before we overwrite it */
         put32(p, (int)(to - p - 4));
         p = tmp;
@@ -859,61 +799,60 @@ static void i_label(char* p)
 }
 
 /* lhs, rhs on stack */
-static void i_store()
-{
+static void i_store() {
     int val = g_rval(V_REG_ANY);
-    int into = g_lval(V_REG_ANY & ~val);
+    int into = g_lval(V_REG_ANY & (~val));
     lead2(val, into); ob(0x89);
     ob(vreg_to_enc(into) + vreg_to_enc(val) * 8);
 }
 
 static void i_addrparam(int loc, int addrof) { VAL(V_LOCAL | V_ISADDR | (addrof ? V_WANTADDR : 0), -loc - 1); }
 static void i_addrlocal(int loc, int addrof) { VAL(V_LOCAL | V_ISADDR | (addrof ? V_WANTADDR : 0), -loc - tvsize(NC.paramnames) - 1); }
-static void i_storelocal(int loc)
-{
+static void i_storelocal(int loc) {
     i_addrlocal(loc, 0);
     g_swap();
     i_store();
 }
+static void i_subscript() {
+    int index = g_rval(V_REG_ANY);
+    int arr = g_rval(V_REG_ANY & (~index));
+    lead(index); ob(0xc1); ob(0xe0 + vreg_to_enc(index)); ob(twok_CTZ(sizeof(size_t))); /* shl rIx, 3 */
+    lead2(arr, index); ob(0x01); ob(0xc0 + vreg_to_enc(arr) + vreg_to_enc(index) * 8); /* add rAx, rIx */
+    lead(arr); ob(0x8b); ob(vreg_to_enc(arr) * 9);
+    VAL(arr, 0);
+}
 
 
-static void i_call(int argcount)
-{
+static void i_call(int argcount) {
     int i, stackdelta = (argcount - tarrsize(funcArgRegs)) * 8, argnostack = 1;
     if (stackdelta < 0) stackdelta = 0;
 #if _WIN32
     stackdelta += 32; /* shadow stack on msft */
     argnostack = 0;
 #endif
-    if (stackdelta > 0)
-    {
+    if (stackdelta > 0) {
         lead(0); ob(0x81); ob(0xec); outnum32(stackdelta);
     }
 
     /* we have them in reverse order (pushed L->R), so reverse index */
-    for (i = 0; i < argcount; ++i)
-    {
+    for (i = 0; i < argcount; ++i) {
         int idx = argcount - i - 1;
-        if (idx >= tarrsize(funcArgRegs))
-        {
+        if (idx >= tarrsize(funcArgRegs)) {
             g_rval(V_REG_R11);
             /* mov [rsp+X], r11 */
             ob(0x4c); ob(0x89); ob(0x5c); ob(0x24); ob((idx - tarrsize(funcArgRegs)*argnostack) * 8);
-        }
-        else g_rval(funcArgRegs[idx]);
+        } else g_rval(funcArgRegs[idx]);
     }
 
     g_rval(V_REG_R11); /* al is used for varargs on amd64 abi, r11 is volatile for both */
     ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
 
-    if (stackdelta > 0)
-    {
+    if (stackdelta > 0) {
         lead(0); ob(0x81); ob(0xc4); outnum32(stackdelta); /* clean up */
     }
 }
 
-static void i_mathunary(int op)
-{
+static void i_mathunary(int op) {
     int reg;
     if (op == '+') return;
     reg = g_rval(V_REG_ANY);
@@ -923,8 +862,7 @@ static void i_mathunary(int op)
 }
 
 /* + - * / % & | ^ */
-static void i_math(int op)
-{
+static void i_math(int op) {
     struct { char math, opc; } map[] = { /* maps KW to x64 instr */
         { '+', 0x01 },
         { '-', 0x29 },
@@ -933,17 +871,14 @@ static void i_math(int op)
         { '^', 0x31 },
         { '|', 0x09 } };
     int opi = tvindexofnp(map, op, 6, 1);
-    if (opi >= 0 || op == '*')
-    {
+    if (opi >= 0 || op == '*') {
         int v1 = g_rval(V_REG_ANY);
         int v0 = g_rval(V_REG_ANY & ~v1);
         lead2(v0, v1); ob(map[opi].opc);
         if (op == '*') ob(0xaf);
         ob(0xc0 + vreg_to_enc(v0) + vreg_to_enc(v1) * 8);
         VAL(op == '*' ? v1 : v0, 0); /* bleh, extended imul args backwards? */
-    }
-    else if (op == '/' || op == '%')
-    {
+    } else if (op == '/' || op == '%') {
         int v1 = g_rval(V_REG_ANY & ~(V_REG_RAX | V_REG_RDX));
         g_rval(V_REG_RAX);
         lead(V_REG_RAX); ob(0x99); /* cqo (sign extend rax into rdx) */
@@ -960,8 +895,7 @@ static void i_math(int op)
 #define NEXT() do { if (C.curtok >= tvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
 #define SKIP(t) do { if (CURTOKt != t) error("'%c' expected, got '%s'", t, CURTOK->data.str); NEXT(); } while(0)
 
-static int genlocal()
-{
+static int genlocal() {
     static int count = 0;
     char buf[128], *name;
     sprintf(buf, "$loc%d", count++);
@@ -970,32 +904,25 @@ static int genlocal()
     return tvindexof(C.locals, name);
 }
 
-static int atom()
-{
-    if (CURTOKt == '(')
-    {
+static int atom() {
+    if (CURTOKt == '(') {
         NEXT();
         or_test();
         SKIP(')');
         return 1;
-    }
-    else if (CURTOKt == '[')
-    {
+    } else if (CURTOKt == '[') {
         int initialCount = tvsize(C.vst);
         NEXT();
         or_test();
-        for (;;)
-        {
-            if (CURTOKt == ']')
-            {
+        for (;;) {
+            if (CURTOKt == ']') {
                 /* todo; reversed i think */
                 char *listpush = strintern("list_push");
                 int i, numElems = tvsize(C.vst) - initialCount, pushidx = tvindexof(C.externnames, listpush), listtmp = genlocal();
                 NEXT();
                 VAL(V_IMMED, 0);
                 i_storelocal(listtmp);
-                for (i = 0; i < numElems; ++i)
-                {
+                for (i = 0; i < numElems; ++i) {
                                                             /* stack: V */
                     VAL(V_IMMED, (unsigned long long) C.externaddrs[pushidx]);   /* stack: V, list_push */
                     g_swap();                               /* stack: list_push, V */
@@ -1005,33 +932,25 @@ static int atom()
                 }
                 i_addrlocal(listtmp, 0);
             }
-            else if (CURTOKt == ',')
-            {
+            else if (CURTOKt == ',') {
                 NEXT();
                 or_test();
-            }
-            else break;
+            } else break;
         }
-    }
-    else if (CURTOKt == T_NUM)
-    {
+    } else if (CURTOKt == T_NUM) {
         VAL(V_IMMED, CURTOK->data.tokn);
         NEXT();
         return 1;
-    }
-    else if (CURTOKt == '@' || CURTOKt == T_IDENT)
-    {
+    } else if (CURTOKt == '@' || CURTOKt == T_IDENT) {
         int i, isaddrof = 0;
-        if (CURTOKt == '@')
-        {
+        if (CURTOKt == '@') {
             isaddrof = 1;
             NEXT();
         }
         if ((i = tvindexof(NC.paramnames, CURTOK->data.str)) != -1) i_addrparam(i, isaddrof);
         else if ((i = tvindexof(C.externnames, CURTOK->data.str)) != -1) VAL(V_IMMED, (unsigned long long)C.externaddrs[i]);
         else if (funcidx(CURTOK->data.str) != -1) VAL(V_FUNC, funcidx(CURTOK->data.str));
-        else
-        {
+        else {
             if (!tvcontains(C.locals, CURTOK->data.str)) tvpush(C.locals, CURTOK->data.str);
             i = tvindexof(C.locals, CURTOK->data.str);
             i_addrlocal(i, isaddrof);
@@ -1042,27 +961,22 @@ static int atom()
     return 0;
 }
 
-static int arglist()
-{
+static int arglist() {
     int count = or_test();
-    while (count && CURTOKt == ',')
-    {
+    while (count && CURTOKt == ',') {
         SKIP(',');
         count += or_test();
     }
     return count;
 }
 
-static char** parameters()
-{
+static char** parameters() {
     char **ret = 0;
-    if (CURTOKt == T_IDENT) 
-    {
+    if (CURTOKt == T_IDENT) {
         tvpush(ret, CURTOK->data.str);
         NEXT();
     }
-    while (ret && CURTOKt == ',')
-    {
+    while (ret && CURTOKt == ',') {
         SKIP(',');
         if (CURTOKt != T_IDENT) error("expecting parameter name");
         tvpush(ret, CURTOK->data.str);
@@ -1071,31 +985,37 @@ static char** parameters()
     return ret;
 }
 
-static int trailer()
-{
-    if (CURTOKt == '(')
-    {
-        int count;
+static int trailer() {
+    if (CURTOKt == '(') {
+        int count, rv = genlocal();
         NEXT();
         count = arglist();
         SKIP(')');
         i_call(count);
-        VAL(V_REG_RAX, 0); /* ret */
+        VAL(V_REG_RAX, 0);
+        i_storelocal(rv);   /* store rv to local in case of e.g. return a() + b() */
+        i_addrlocal(rv, 0);
+        return 1;
+    } else if (CURTOKt == '[') {
+        int count;
+        NEXT();
+        count = or_test();
+        if (count == 0) error("expecting subscript");
+        SKIP(']');
+        i_subscript();
+        return 1;
     }
     return 0;
 }
 
-static int atomplus()
-{
+static int atomplus() {
     int ret = atom();
     while (trailer()) {}
     return ret;
 }
 
-static int factor()
-{
-    if (CURTOKt == '+' || CURTOKt == '-' || CURTOKt == '~')
-    {
+static int factor() {
+    if (CURTOKt == '+' || CURTOKt == '-' || CURTOKt == '~') {
         int op = CURTOKt, count;
         NEXT();
         count = factor();
@@ -1106,17 +1026,15 @@ static int factor()
 }
 
 #define EXPRP(name, sub, tok0, tok1, tok2)                              \
-static int name()                                                       \
-{                                                                       \
+static int name() {                                                     \
     int count = sub();                                                  \
-    while (CURTOKt == tok0 || CURTOKt == tok1 || CURTOKt == tok2)       \
-    {                                                                   \
+    while (CURTOKt == tok0 || CURTOKt == tok1 || CURTOKt == tok2) {     \
         int op = CURTOKt;                                               \
         NEXT();                                                         \
         count += sub();                                                 \
         i_math(op);                                                     \
     }                                                                   \
-    return count;                                                       \
+    return count > 0;                                                   \
 }
 EXPRP(term, factor, '*', '/', '%')
 EXPRP(arith_expr, term, '+', '-', '-')
@@ -1124,12 +1042,10 @@ EXPRP(and_expr, arith_expr, '&', '&', '&')
 EXPRP(xor_expr, and_expr, '^', '^', '^')
 EXPRP(expr, xor_expr, '|', '|', '|')
 
-static int comparison()
-{
+static int comparison() {
     char cmps[] = { '<', '>', KW(<=), KW(>=), KW(==), KW(!=) };
     int count = expr();
-    for (;;)
-    {
+    for (;;) {
         Token* cmp = CURTOK;
         if (!tvcontainsn_nonnull(cmps, CURTOKt, 6)) break;
         NEXT();
@@ -1139,10 +1055,8 @@ static int comparison()
     return count;
 }
 
-static int not_test()
-{
-    if (CURTOKt == KW(not))
-    {
+static int not_test() {
+    if (CURTOKt == KW(not)) {
         SKIP(KW(not));
         comparison();
         VAL(V_IMMED, 0);
@@ -1153,15 +1067,12 @@ static int not_test()
 }
 
 #define BOOLOP(name, sub, kw, cond)             \
-static int name()                               \
-{                                               \
+static int name() {                             \
     char *label = 0;                            \
     int count = sub();                          \
-    if (count && CURTOKt == KW(kw))             \
-    {                                           \
+    if (count && CURTOKt == KW(kw)) {           \
         int tmp = genlocal(), done = 0;         \
-        for (;;)                                \
-        {                                       \
+        for (;;) {                              \
             i_storelocal(tmp);                  \
             i_addrlocal(tmp, 0);                \
             label = i_jmpc(cond, label);        \
@@ -1178,11 +1089,9 @@ static int name()                               \
 BOOLOP(and_test, not_test, and, 0)
 BOOLOP(or_test, and_test, or, 1)
 
-static void expr_stmt()
-{
+static void expr_stmt() {
     or_test();
-    if (CURTOKt == '=')
-    {
+    if (CURTOKt == '=') {
         NEXT();
         or_test();
         i_store();
@@ -1191,30 +1100,22 @@ static void expr_stmt()
     SKIP(T_NL);
 }
 
-static void stmt()
-{
+static void stmt() {
     char *labeldone = 0, *labeltest = 0;
-    if (CURTOKt == KW(return))
-    {
+    if (CURTOKt == KW(return)) {
         SKIP(KW(return));
         if (CURTOKt == T_NL || CURTOKt == T_DEDENT) VAL(V_IMMED, 20710);
         else or_test();
         i_ret();
         SKIP(T_NL);
-    }
-    else if (CURTOKt == KW(print))
-    {
+    } else if (CURTOKt == KW(print)) {
         SKIP(KW(print));
         NEXT();
         SKIP(T_NL);
-    }
-    else if (CURTOKt == KW(pass))
-    {
+    } else if (CURTOKt == KW(pass)) {
         NEXT();
         SKIP(T_NL);
-    }
-    else if (CURTOKt == KW(if))
-    {
+    } else if (CURTOKt == KW(if)) {
         SKIP(KW(if));
         or_test();
 
@@ -1223,18 +1124,14 @@ static void stmt()
         labeldone = i_jmpc(J_UNCOND, 0);
         i_label(labeltest);
 
-        while (CURTOKt == KW(elif) || CURTOKt == KW(else))
-        {
+        while (CURTOKt == KW(elif) || CURTOKt == KW(else)) {
             NEXT();
-            if (PREVTOK.type == KW(elif))
-            {
+            if (PREVTOK.type == KW(elif)) {
                 or_test();
                 labeltest = i_jmpc(0, 0);
-            }
-            else labeltest = 0;
+            } else labeltest = 0;
             suite();
-            if (labeltest)
-            {
+            if (labeltest) {
                 labeldone = i_jmpc(J_UNCOND, labeldone);
                 i_label(labeltest);
             }
@@ -1245,8 +1142,7 @@ static void stmt()
     else expr_stmt();
 }
 
-static void suite()
-{
+static void suite() {
     SKIP(':');
     SKIP(T_NL);
     SKIP(T_INDENT);
@@ -1256,17 +1152,13 @@ static void suite()
     SKIP(T_DEDENT);
 }
 
-static void funcdef()
-{
-    if (CURTOKt == KW(extern))
-    {
+static void funcdef() {
+    if (CURTOKt == KW(extern)) {
         SKIP(KW(extern));
         i_extern(CURTOK->data.str);
         NEXT();
         SKIP(T_NL);
-    }
-    else
-    {
+    } else {
         char **argnames, *fname;
         SKIP(KW(def));
         C.locals = NULL;
@@ -1281,10 +1173,8 @@ static void funcdef()
     }
 }
 
-static void fileinput()
-{
-    while (CURTOKt != T_END)
-    {
+static void fileinput() {
+    while (CURTOKt != T_END) {
         if (CURTOKt == T_NL) NEXT();
         else funcdef();
     }
@@ -1297,25 +1187,30 @@ static void fileinput()
 
 static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
 static int tlistLen(tword* L) { return tvsize(L); }
+static tword *tRange(tword upper) {
+    int i;
+    tword *ret = NULL;
+    for (i = 0; i < upper; ++i) tvpush(ret, i);
+    return ret;
+}
 
 struct NamePtrPair { char *name; void *func; };
 static struct NamePtrPair stdlibFuncs[] = {
     { "list_push", tlistPush },
     { "len", tlistLen },
+    { "range", tRange },
     { "mempush", tba_pushcheckpoint },
     { "mempop", tba_popcheckpoint },
     { NULL, NULL },
 };
-static void *stdlibLookup(char *name)
-{
+static void *stdlibLookup(char *name) {
     struct NamePtrPair *p = stdlibFuncs;
     for (; p->name; ++p)
         if (strcmp(p->name, name) == 0)
             return p->func;
     return NULL;
 }
-static void exportStdlib()
-{
+static void exportStdlib() {
     struct NamePtrPair *p = stdlibFuncs;
     for (; p->name; ++p) i_extern(p->name);
 }
@@ -1323,24 +1218,21 @@ static void exportStdlib()
 /*
  * main api entry point
  */
-int twokRun(char *code, void *(*externLookup)(char *name))
-{
+int twokRun(char *code, void *(*externLookup)(char *name)) {
     int ret, allocSize, entryidx;
     memset(&C, 0, sizeof(C));
     memset(&NC, 0, sizeof(NC));
     C.input = code;
     C.externLookup = externLookup;
     allocSize = 1<<17;
-    if (setjmp(C.errBuf) == 0)
-    {
+    if (setjmp(C.errBuf) == 0) {
         tba_pushcheckpoint();
         exportStdlib();
         tokenize();
         /* dump tokens generated from stream */
 #if 0
         { int j;
-        for (j = 0; j < tvsize(C.tokens); ++j)
-        {
+        for (j = 0; j < tvsize(C.tokens); ++j) {
             if (C.tokens[j].type == T_NUM)
                 printf("%d: %d %lld\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
             else
@@ -1363,9 +1255,7 @@ int twokRun(char *code, void *(*externLookup)(char *name))
         if (entryidx == -1) error("no entry point '__main__'");
         tba_popcheckpoint();
         ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
-    }
-    else
-    {
+    } else {
         tba_popcheckpoint();
         ret = -1;
     }
