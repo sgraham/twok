@@ -264,7 +264,7 @@ typedef struct Context {
 
 static Context C;
 static void suite();
-static void or_test();
+static int or_test();
 static int atomplus();
 static void *stdlibLookup(char *name);
 static void error(char *fmt, ...);
@@ -1044,11 +1044,11 @@ static int atom()
 
 static int arglist()
 {
-    int count = atomplus();
+    int count = or_test();
     while (count && CURTOKt == ',')
     {
         SKIP(',');
-        count += atomplus();
+        count += or_test();
     }
     return count;
 }
@@ -1092,29 +1092,31 @@ static int atomplus()
     return ret;
 }
 
-static void factor()
+static int factor()
 {
     if (CURTOKt == '+' || CURTOKt == '-' || CURTOKt == '~')
     {
-        int op = CURTOKt;
+        int op = CURTOKt, count;
         NEXT();
-        factor();
+        count = factor();
         i_mathunary(op);
+        return count;
     }
-    else atomplus();
+    else return atomplus();
 }
 
 #define EXPRP(name, sub, tok0, tok1, tok2)                              \
-static void name()                                                      \
+static int name()                                                       \
 {                                                                       \
-    sub();                                                              \
+    int count = sub();                                                  \
     while (CURTOKt == tok0 || CURTOKt == tok1 || CURTOKt == tok2)       \
     {                                                                   \
         int op = CURTOKt;                                               \
         NEXT();                                                         \
-        sub();                                                          \
+        count += sub();                                                 \
         i_math(op);                                                     \
     }                                                                   \
+    return count;                                                       \
 }
 EXPRP(term, factor, '*', '/', '%')
 EXPRP(arith_expr, term, '+', '-', '-')
@@ -1122,21 +1124,22 @@ EXPRP(and_expr, arith_expr, '&', '&', '&')
 EXPRP(xor_expr, and_expr, '^', '^', '^')
 EXPRP(expr, xor_expr, '|', '|', '|')
 
-static void comparison()
+static int comparison()
 {
     char cmps[] = { '<', '>', KW(<=), KW(>=), KW(==), KW(!=) };
-    expr();
+    int count = expr();
     for (;;)
     {
         Token* cmp = CURTOK;
         if (!tvcontainsn_nonnull(cmps, CURTOKt, 6)) break;
         NEXT();
-        expr();
+        count += expr();
         i_cmp(cmp->type);
     }
+    return count;
 }
 
-static void not_test()
+static int not_test()
 {
     if (CURTOKt == KW(not))
     {
@@ -1144,16 +1147,17 @@ static void not_test()
         comparison();
         VAL(V_IMMED, 0);
         i_cmp(KW(==));
+        return 1;
     }
-    else comparison();
+    else return comparison();
 }
 
 #define BOOLOP(name, sub, kw, cond)             \
-static void name()                              \
+static int name()                               \
 {                                               \
     char *label = 0;                            \
-    sub();                                      \
-    if (CURTOKt == KW(kw))                      \
+    int count = sub();                          \
+    if (count && CURTOKt == KW(kw))             \
     {                                           \
         int tmp = genlocal(), done = 0;         \
         for (;;)                                \
@@ -1163,12 +1167,13 @@ static void name()                              \
             label = i_jmpc(cond, label);        \
             if (done) break;                    \
             SKIP(KW(kw));                       \
-            sub();                              \
+            count += sub();                     \
             done = CURTOKt != KW(kw);           \
         }                                       \
         i_addrlocal(tmp, 0);                    \
     }                                           \
     i_label(label);                             \
+    return count;                               \
 }
 BOOLOP(and_test, not_test, and, 0)
 BOOLOP(or_test, and_test, or, 1)

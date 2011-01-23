@@ -435,5 +435,21 @@ def __main__():
     L = [777, 888, 999]
     return len(L)
 
+### 13 expr in call
+def functest(n):
+    return n
+def __main__():
+    x = 14
+    return functest(x-1)
+
+### 165580141 DISABLED fib(40)
+def fib(n):
+    if n <= 1:
+        return 1
+    else:
+        return fib(n-1) + fib(n-2)
+def __main__():
+    return fib(40)
+
 ### 99999 END
 # vim: set ft=python:
