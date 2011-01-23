@@ -442,7 +442,7 @@ static void error(char *fmt, ...) {
  */
 
 /* todo; True, False, None? */
-static char KWS[] = " if elif else or for def return extern mod and not print pass << >> <= >= == != ";
+static char KWS[] = " if elif else or for def return extern in and not print pass << >> <= >= == != ";
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
 char* strintern(char* s) {
     int i;
@@ -1115,6 +1115,18 @@ static void stmt() {
     } else if (CURTOKt == KW(pass)) {
         NEXT();
         SKIP(T_NL);
+    } else if (CURTOKt == KW(for)) {
+        NEXT();
+
+        int iterpos = genlocal();
+        VAL(V_IMMED);
+        i_storelocal(iterpos);
+        SKIP(T_IDENT);
+        SKIP(KW(in));
+        or_test();
+        labeldone = i_jmpc(0, 0);
+        suite();
+        i_label(labeldone);
     } else if (CURTOKt == KW(if)) {
         SKIP(KW(if));
         or_test();
@@ -1244,7 +1256,7 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
