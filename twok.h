@@ -1116,10 +1116,9 @@ static void stmt() {
         NEXT();
         SKIP(T_NL);
     } else if (CURTOKt == KW(for)) {
-        NEXT();
-
         int iterpos = genlocal();
-        VAL(V_IMMED);
+        NEXT();
+        VAL(V_IMMED, 0);
         i_storelocal(iterpos);
         SKIP(T_IDENT);
         SKIP(KW(in));
@@ -1256,7 +1255,7 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
