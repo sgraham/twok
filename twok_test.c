@@ -39,6 +39,19 @@ int test6(void(*fp)())
     return ret;
 }
 
+static void print(char *fmt, ...) {
+    va_list ap;
+	char tmp[2048];
+
+    va_start(ap, fmt);
+    vsprintf(tmp, fmt, ap);
+	printf("%s", tmp);
+#ifdef _MSC_VER
+	OutputDebugStringA(tmp);
+#endif
+    va_end(ap);
+}
+
 void* getExternFunc(char *name)
 {
     if (strcmp(name, "test0") == 0) return XXXtest0;
@@ -81,7 +94,7 @@ int main(int argc, char** argv)
     {
         if (src[0] != '#' || src[1] != '#' || src[2] != '#')
         {
-            fprintf(stderr, "expecting ### line in tests\n");
+            print("expecting ### line in tests\n");
             exit(1);
         }
         src += 4;
@@ -92,7 +105,7 @@ int main(int argc, char** argv)
         *(desc - 1) = 0;
         if (strcmp(description, "END") == 0)
         {
-            printf("%d/%d tests passed (+%d disabled)\n", passCount, passCount + failCount, disabledCount);
+            print("%d/%d tests passed (+%d disabled)\n", passCount, passCount + failCount, disabledCount);
             break;
         }
         dest = curtest;
@@ -107,16 +120,16 @@ int main(int argc, char** argv)
             disabledCount++;
             continue;
         }
-        printf("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
+        print("[%3d %20s %s]: ", i, description, expectedRC == -1 ? "err" : "   ");
         ret = twokRun(curtest, getExternFunc);
         failed = ret != expectedRC || (expectedRC == -1 && strstr(C.errorText, description) == NULL);
-        printf("%s\n", failed ? "FAILED": "ok");
+        print("%s\n", failed ? "FAILED": "ok");
         failCount += failed;
         passCount += !failed;
         if (failed || verbose)
         {
-            printf("\n------------------------\n%s------------------------\n", curtest);
-            printf("rc=%d, want=%d, desc='%s'\n%s%s\n\n", ret, expectedRC, description,
+            print("\n------------------------\n%s------------------------\n", curtest);
+            print("rc=%d, want=%d, desc='%s'\n%s%s\n\n", ret, expectedRC, description,
                     C.errorText[0] ? "Error:\n" : "", C.errorText);
         }
     }
