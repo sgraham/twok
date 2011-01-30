@@ -2,5 +2,15 @@ syntax: glob
 .*
 *.swp
 zept_test
+zept_test.exe
+twok_test
+twok_test.exe
 *.dSYM
 dump.dat
+*.suo
+*.pdb
+*.ncb
+*.ilk
+*.obj
+vsproj/x64
+vsproj/*.user
