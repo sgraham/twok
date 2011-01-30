@@ -607,7 +607,7 @@ static void g_storespill(int reg, int slot) {
 
 /* load spill # slot into reg */
 static void g_loadspill(int reg, int slot) {
-    lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg));
+    lead(reg); ob(0x8b); ob(0x85 + vreg_to_enc(reg) * 8);
     outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
@@ -698,10 +698,10 @@ static int g_rval(int valid) {
     else if ((reg = (tag & V_REG_ANY) & valid)) { /* nothing to do, just return register */ }
     else if ((reg2 = (tag & V_REG_ANY))) {
         /* in a register, but not the one we need */
-        int reg = getReg(valid);
+        reg = getReg(valid);
         lead2(reg, reg2); ob(0x89); ob(0xc0 + vreg_to_enc(reg) + vreg_to_enc(reg2) * 8); /* mov rXx, rXx */
     } else if (tag & V_TEMP) {
-        int reg = getReg(valid);
+        reg = getReg(valid);
         g_loadspill(reg, (int)val);
     }
     else error("internal error, unexpected stack state");
@@ -735,8 +735,9 @@ static void i_func(char *name, char **paramnames)
     VAL(V_IMMED, 0); /* for fall off ret */
 }
 static void i_extern(char* name) {
+    void *p;
     name = strintern(name);
-    void *p = C.externLookup(name);
+    p = C.externLookup(name);
     if (!p) p = stdlibLookup(name);
     if (!p) error("'%s' not found", name);
     if (tvcontains(C.externnames, name)) return; /* not an error, just ignore. */
@@ -761,7 +762,7 @@ static void i_cmp(int op) {
         { KW(!=), 5 },
     };
     a = g_rval(V_REG_RAX);
-    into = g_rval(V_REG_ANY & ~a);
+    into = g_rval(V_REG_ANY & (~a));
     lead(into); ob(0x39 + vreg_to_enc(a)); ob(0xc0 + vreg_to_enc(into)); /* cmp rXx, rax */
 
     lead(into); ob(0xb8 + vreg_to_enc(into));
@@ -850,6 +851,7 @@ static void i_call(int argcount) {
     if (stackdelta > 0) {
         lead(0); ob(0x81); ob(0xc4); outnum32(stackdelta); /* clean up */
     }
+    VAL(V_REG_RAX, 0);
 }
 
 static void i_mathunary(int op) {
@@ -929,6 +931,7 @@ static int atom() {
                     i_addrlocal(listtmp, 1);                /* stack: list_push, V, @L */
                     g_swap();                               /* stack: list_push, @L, V */
                     i_call(2);
+                    tvpop(C.vst); /* discard */
                 }
                 i_addrlocal(listtmp, 0);
             }
@@ -992,7 +995,6 @@ static int trailer() {
         count = arglist();
         SKIP(')');
         i_call(count);
-        VAL(V_REG_RAX, 0);
         i_storelocal(rv);   /* store rv to local in case of e.g. return a() + b() */
         i_addrlocal(rv, 0);
         return 1;
@@ -1116,16 +1118,39 @@ static void stmt() {
         NEXT();
         SKIP(T_NL);
     } else if (CURTOKt == KW(for)) {
-        int iterpos = genlocal();
+        char *lenstr = strintern("len"), *topofloop;
+        int iterpos = genlocal(), iterthru = genlocal(), lenidx = tvindexof(C.externnames, lenstr), itervar;
         NEXT();
         VAL(V_IMMED, 0);
-        i_storelocal(iterpos);
-        SKIP(T_IDENT);
+        i_storelocal(iterpos); /* store 0 into the indexer */
+        if (!tvcontains(C.locals, CURTOK->data.str)) tvpush(C.locals, CURTOK->data.str);
+        itervar = tvindexof(C.locals, CURTOK->data.str); /* this is the value in the list */
+        NEXT();
         SKIP(KW(in));
-        or_test();
-        labeldone = i_jmpc(0, 0);
+        or_test(); /* this is the list */
+        i_storelocal(iterthru);
+
+        /* now we're set up. run through the list, incrementing iterpos, dereferencing the
+           list into itervar, and exit when we get to the end */
+        topofloop = C.codep;
+        VAL(V_IMMED, (unsigned long long)C.externaddrs[lenidx]);    /* stack: lenfunc */
+        i_addrlocal(iterthru, 0);                                   /* stack: lenfunc, L */
+        i_call(1);                                                  /* stack: length */
+        i_addrlocal(iterpos, 0);                                    /* stack: length, pos */
+        i_cmp('<');
+        labeltest = i_jmpc(1, 0);
+
+        /* todo; itervar = L[iterpos] */
+
+        /* finally get around to doing body of loop */
         suite();
-        i_label(labeldone);
+
+        /* todo; increment */
+
+        /* jump to top of loop at comparison */
+        //i_jmpc(J_UNCOND, (char*)(topofloop - C.codep + C.codeseg - 5)); /* abuse i_jmpc for unconditional neg branch */
+
+        i_label(labeltest);
     } else if (CURTOKt == KW(if)) {
         SKIP(KW(if));
         or_test();
@@ -1255,11 +1280,11 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
-        ret = system("ndisasm -b64 dump.dat"); }
+        ret = system("ndisasm -b64 dump.dat > x.asm"); }
 #endif
 
         entryidx = funcidx("__main__");
