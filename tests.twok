@@ -498,5 +498,9 @@ def __main__():
 def __main__():
     return len("a\bcdefghijklm\n\r\t")
 
+### 960 utf-8 decode
+def __main__():
+    return "λ(x) = π"[7]
+
 ### 99999 END
 # vim: set ft=python:
