@@ -1,6 +1,6 @@
 /* twok-0.10
-   public domain
-   python-styled native-compiling scripting language
+   Public domain
+   Python-styled native-compiling scripting language
    http://h4ck3r.net/#twok
 
    Scott Graham 2011 <scott.twok@h4ck3r.net>
@@ -16,67 +16,110 @@ in *one* C file that you want to contain the implementation.
 
 ABOUT:
 
-    Native compile on x64, ARM (not yet), PPC (not yet), or interpreted
-    <2k LOC implementation
+    Native compile on x64, ARM (not yet), or interpreted (not yet)
+    <2k LOC implementation (`sloccount twok.h`)
     No external dependencies
 
-    ("twok" is a reference to the lines of code for the implementation)
+    ("twok" is a reference to the lines of code for the implementation, but currently
+    only ~1k).
 
 
 TODO:
 
-        lists
-            L = []
-            push(L, 4)
-            push(L, 3)
-            x = pop(L)
-        [1,2,3,...] and "qwerty" construct lists.
-        
-        the value stored in L points to a word which points to the vector. this is
-        done so that push(L, ...) can be call-by-value, rather than having to
-        either make all calls require a token to indicate passing the address or
-        to require function type annotation to indicate the address should be
-        passed rather than the value.
-
-        hmm, that works when passed to C, but what do we do in-language? need to
-        have dereference operations. possibly:
-            L[0]
-            *(L)
-            *(L+1)
-            L->1
-            L.1
-            L:1
-            L@1
-            @L
-        . is nice if we add some simple 'structure' definitions and allow defining x === 0
-        for L.x === L.0, but only good for lists, not plain pointers
-
-        @L is highlighted as a decorator in python. perhaps good as address-of?
-        other possibilities $ % & ^ ` ? !
-        -- either @ or &
-
-        greenspun ourselves some macros to make push nicer:
+    only way to dereference right now is blah[0] which is ugly
+    probably unary * would do, but wait to see how structs might work
+    perhaps fixable by macro? might be too complicated for the macros
+    
+    macros:
 
         mac push(L, i):
-            return `list_push(@%(L), %(i))`
+            return [|
+                listaddr_push(@$(L), $(i))
+            |]
 
-        push(L, 1) --> list_push(@L, 1)
-
+        hmm, but what about actual processing?
 
         mac push_up_to(L, i):
             for j in range(i):
-                list_push(@%(L), %(i))
+                return [|
+                    listaddr_push(@$(L), $(j))
+                |]
 
-        $0-$9 are the arguments in () as a call. $$ is the suite after a :
-        some sort of tokenization location saving/popping to do substitution
-        how does indent/dedent work?
-        -- just do version without blocks for now, it can run some code that
-        generates some more code. `` is like 
+        and how does indent/dedent work?
 
-    strings (just different syntax for []) + a "pack" for passing to C
-    for x in blah
-    range func
-    print func
+    structs:
+
+        struct Stuff: x, y, z
+        makes function Stuff(a,b,c) which pushes @Stuff,0,a,b,c onto list and returns it
+
+            struct Stuff: x, y, z
+            def __main__():
+                v = Stuff(6, 7, 8)
+                return v.Stuff_x + v.Stuff_y
+
+        can't be just .x and .y without doing a runtime lookup, e.g.:
+            struct A: x, y
+            struct B: y, x
+        then
+            def doit(val):
+                # what's this return?
+                return val.x
+
+        so,
+            struct Pos: x, y
+            struct Pos3d(Pos): z
+
+            p = Pos(1, 2)
+            p3d = Pos3d(1, 2, 3)
+            Pos?(p) == 1
+            Pos3d?(p3d) == 1
+            Pos3d?(p) == 0
+
+            return p.Pos_x = p.Pos_y        # etc.
+
+        makes a list with 2 extra elements, first is pointer to ctor function, second is
+        pointer to parent's predicate function.
+
+        i.e., the predicate functions do:
+            if S[0] == MyType: return 1
+            if S[1]: return S[1](S)
+            return 0
+
+        possibly use 'class' or 'with' instead of struct because it's highlighted
+        when using python syntax highlighting. 'class' is quite different than what
+        we're actually doing, 'with' looks a bit weird, but might be better to
+        distinguish it.
+        
+        --> yah, i think "class" because lack of syntax highlighting sucks
+        and we might want to use 'with' for scope enter/leave.
+
+
+
+    *args in function parameters:
+
+        def blah(a, b, *args)
+    takes 2+ params and args is an array of the rest of them.
+
+    the called function constructs the args array on entry. in order to know
+    how many arguments were passed, all calls set a hidden parameter (r10 on x64)
+    'al' is used for this on sysv amdx64, but only represents the number of vector
+    regs used, not the total num args. msft doesn't have any indication.
+
+    unfortunately, this convention means that *args funcs aren't callable from C
+    but oh well. could probably write a mini-forwarding function that sets r10 and
+    then jumps to the real function.
+
+    also want unary * for splatting when calling.
+
+
+    funcs:
+        print
+        enumerate
+        zip
+        format?
+        sorted
+    list comprehensions
+    pack for passing utf-8 back to C
     arm backend (on android ndk maybe)
     uninit var tracking (maybe optional?)
     more tests for various math/expr ops
@@ -85,7 +128,7 @@ TODO:
     share genlocal and atom.T_IDENT
 
 
-NOTES: (mostly internal mumbling)
+NOTES: (mostly mumbling about internal implementation details)
 
     functions
         - indirected through global table for hotpatching
@@ -183,6 +226,13 @@ NOTES: (mostly internal mumbling)
         manual malloc/free tbd, not sure of a good way to hook up
         automatically allocating things to use manual instead (i.e. lists)
 
+    strings (just different syntax for [])
+        - decodes from utf-8 in source file to word-sized list at runtime
+        - no pack yet for passing back to C as utf-8
+    range func
+        - only one arg, not various python since we don't have varargs (yet?)
+    for x in blah
+        - blah is always a list (as per range(), or [] synax)
 */
 
 #ifndef INCLUDED_TWOK_H
@@ -253,8 +303,8 @@ typedef struct Value {
 
 typedef struct Context {
     Token *tokens;
-    int curtok;
-    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs;
+    int curtok, *accessorOffsets;
+    char *input, *codeseg, *codesegend, *codep, **strs, **locals, **funcnames, **funcaddrs, **externnames, **externaddrs, **accessorNames;
     void *(*externLookup)(char *name);
     Value *instrs, *vst;
     jmp_buf errBuf;
@@ -435,7 +485,7 @@ static void error(char *fmt, ...) {
  */
 
 /* todo; True, False, None? */
-static char KWS[] = " if elif else or for def return extern in and not print pass << >> <= >= == != ";
+static char KWS[] = " if elif else or for def return extern class in and not print pass << >> <= >= == != ";
 static struct { char from, to; } strEscapes[] = {{'\\','\\'}, {'\'','\''}, {'"','"'}, {'b','\b'},{'r','\r'},{'t','\t'},{'n','\n'},{'0','\0'}};
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
 static char* strintern(char* s) {
@@ -453,7 +503,7 @@ enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_STR, T_INDENT, T_
 #define TOK(t) do { Token _ = { t, (int)(startpos - C.input), { strintern(#t) } }; tvpush(C.tokens, _); } while(0)
 #define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), { strintern(s) } }; tvpush(C.tokens, _); } while(0)
 #define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input), { 0 } }; _.data.tokn=v; tvpush(C.tokens, _); } while(0)
-#define isid(ch) (isalnum(ch) || ch == '_')
+#define isid(ch) (isalnum(ch) || ch == '_' || ch == '?')
 
 static void tokenize() {
     char *pos = C.input, *startpos;
@@ -855,6 +905,9 @@ static void i_call(int argcount) {
         } else g_rval(funcArgRegs[idx]);
     }
 
+    /* stuff argcount into r10 for *args receiving functions */
+    ob(0x49); ob(0xba); outnum64(argcount);
+
     g_rval(V_REG_R11); /* al is used for varargs on amd64 abi, r11 is volatile for both */
     ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
 
@@ -943,8 +996,18 @@ static int genlocal() {
     return tvindexof(C.locals, name);
 }
 
+static void addAccessor(char *basename, char *itemname, int index) {
+    int i;
+    char buf[256], *tmp;
+    sprintf(buf, "%s_%s", basename, itemname);
+    tmp = strintern(buf);
+    for (i = 0; i < tvsize(C.accessorNames); ++i) if (C.accessorNames[i] == tmp) return;
+    tvpush(C.accessorNames, tmp);
+    tvpush(C.accessorOffsets, index);
+}
+
 static int atom() {
-    char *listpush = strintern("list_push");
+    char *listpush = strintern("listaddr_push");
     int pushidx = tvindexof(C.externnames, listpush);
     if (CURTOKt == '(') {
         NEXT();
@@ -964,10 +1027,10 @@ static int atom() {
                 i_storelocal(listtmp);
                 for (i = 0; i < numElems; ++i) {
                                                             /* stack: V */
-                    VAL(V_IMMED, (unsigned long long)C.externaddrs[pushidx]);   /* stack: V, list_push */
-                    g_swap();                               /* stack: list_push, V */
-                    i_addrlocal(listtmp, 1);                /* stack: list_push, V, @L */
-                    g_swap();                               /* stack: list_push, @L, V */
+                    VAL(V_IMMED, (unsigned long long)C.externaddrs[pushidx]);   /* stack: V, listaddr_push */
+                    g_swap();                               /* stack: listaddr_push, V */
+                    i_addrlocal(listtmp, 1);                /* stack: listaddr_push, V, @L */
+                    g_swap();                               /* stack: listaddr_push, @L, V */
                     i_call(2);
                     tvpop(C.vst); /* discard */
                 }
@@ -1042,23 +1105,31 @@ static char** parameters() {
 }
 
 static int trailer() {
+    int i;
     if (CURTOKt == '(') {
-        int count, rv = genlocal();
+        int rv = genlocal();
         NEXT();
-        count = arglist();
+        i = arglist();
         SKIP(')');
-        i_call(count);
+        i_call(i);
         i_storelocal(rv);   /* store rv to local in case of e.g. return a() + b() */
         i_addrlocal(rv, 0);
         return 1;
     } else if (CURTOKt == '[') {
-        int count;
         NEXT();
-        count = or_test();
-        if (count == 0) error("expecting subscript");
+        i = or_test();
+        if (i == 0) error("expecting subscript");
         SKIP(']');
         i_subscript();
         return 1;
+    } else if (CURTOKt == '.') {
+        NEXT();
+        if ((i = tvindexof(C.accessorNames, CURTOK->data.str)) != -1) {
+            SKIP(T_IDENT);
+            VAL(V_IMMED, C.accessorOffsets[i]);
+            i_subscript();
+            return 1;
+        } else error("no accessor named '%s'", CURTOK->data.str);
     }
     return 0;
 }
@@ -1248,21 +1319,35 @@ static void suite() {
     SKIP(T_DEDENT);
 }
 
-static void funcdef() {
+static void toplevel() {
+    char **argnames, *name;
     if (CURTOKt == KW(extern)) {
         SKIP(KW(extern));
         i_extern(CURTOK->data.str);
         NEXT();
         SKIP(T_NL);
+    } else if (CURTOKt == KW(class)) {
+        int i;
+        SKIP(KW(class));
+        name = CURTOK->data.str;
+        SKIP(T_IDENT);
+        SKIP(':');
+        argnames = parameters();
+        for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 1);
+        /* ctor. general idea is to make a varargs func that returns *args
+           with parent and name unshifted onto it */
+        i_func(name, argnames);
+        /* code to assign args to list.  */
+        /* maybe just def Stuff(*args): return [Stuff, 0, args] */
+        i_endfunc();
     } else {
-        char **argnames, *fname;
         SKIP(KW(def));
         C.locals = NULL;
-        fname = CURTOK->data.str;
+        name = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
         argnames = parameters();
-        i_func(fname, argnames);
+        i_func(name, argnames);
         SKIP(')');
         suite();
         i_endfunc();
@@ -1272,7 +1357,7 @@ static void funcdef() {
 static void fileinput() {
     while (CURTOKt != T_END) {
         if (CURTOKt == T_NL) NEXT();
-        else funcdef();
+        else toplevel();
     }
     SKIP(T_END);
 }
@@ -1282,6 +1367,7 @@ static void fileinput() {
  */
 
 static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
+static void tlistPop(tword* L) { tvpop(L); }
 static int tlistLen(tword* L) { return tvsize(L); }
 static tword *tRange(tword upper) {
     int i;
@@ -1289,26 +1375,38 @@ static tword *tRange(tword upper) {
     for (i = 0; i < upper; ++i) tvpush(ret, i);
     return ret;
 }
+static void tlistShift(tword* L) {
+    int i;
+    for (i = 0; i < tvsize(L) - 1; ++i) L[i] = L[i + 1];
+    tvpop(L);
+}
+static void tlistUnshift(tword **L, tword v) {
+    int i;
+    tvpush(*L, -1);
+    for (i = 0; i < tvsize(*L) - 1; ++i) (*L)[i + 1] = (*L)[i];
+    (*L)[0] = v;
+}
 
-struct NamePtrPair { char *name; void *func; };
-static struct NamePtrPair stdlibFuncs[] = {
-    { "list_push", tlistPush },
+typedef struct NamePtrPair { char *name; void *func; } NamePtrPair;
+static NamePtrPair stdlibFuncs[] = {
     { "len", tlistLen },
-    { "range", tRange },
-    { "mempush", tba_pushcheckpoint },
+    { "listaddr_push", tlistPush },
+    { "listaddr_unshift", tlistUnshift },
     { "mempop", tba_popcheckpoint },
-    { NULL, NULL },
+    { "mempush", tba_pushcheckpoint },
+    { "pop", tlistPop },
+    { "range", tRange },
+    { "shift", tlistShift },
 };
+static int strcmpPair(const void *a, const void *b) { return strcmp(((NamePtrPair*)a)->name, ((NamePtrPair*)b)->name); }
 static void *stdlibLookup(char *name) {
-    struct NamePtrPair *p = stdlibFuncs;
-    for (; p->name; ++p)
-        if (strncmp(p->name, name, tvsize(name)) == 0)
-            return p->func;
-    return NULL;
+    NamePtrPair tmp = { name, 0 };
+    NamePtrPair *p = bsearch(&tmp, stdlibFuncs, tarrsize(stdlibFuncs), sizeof(NamePtrPair), strcmpPair);
+    return p ? p->func : NULL;
 }
 static void exportStdlib() {
-    struct NamePtrPair *p = stdlibFuncs;
-    for (; p->name; ++p) i_extern(p->name);
+    int i;
+    for (i = 0; i < tarrsize(stdlibFuncs); ++i) i_extern(stdlibFuncs[i].name);
 }
 
 /*
