@@ -1133,23 +1133,30 @@ static void stmt() {
         /* now we're set up. run through the list, incrementing iterpos, dereferencing the
            list into itervar, and exit when we get to the end */
         topofloop = C.codep;
-        VAL(V_IMMED, (unsigned long long)C.externaddrs[lenidx]);    /* stack: lenfunc */
-        i_addrlocal(iterthru, 0);                                   /* stack: lenfunc, L */
-        i_call(1);                                                  /* stack: length */
-        i_addrlocal(iterpos, 0);                                    /* stack: length, pos */
+        i_addrlocal(iterpos, 0);                                    /* stack: pos */
+        VAL(V_IMMED, (unsigned long long)C.externaddrs[lenidx]);    /* stack: pos, lenfunc */
+        i_addrlocal(iterthru, 0);                                   /* stack: pos, lenfunc, L */
+        i_call(1);                                                  /* stack: pos, length */
         i_cmp('<');
-        labeltest = i_jmpc(1, 0);
+        labeltest = i_jmpc(0, 0);  /* if not less, we're done */
 
-        /* todo; itervar = L[iterpos] */
+        /* itervar = L[iterpos] */
+        i_addrlocal(iterthru, 0);
+        i_addrlocal(iterpos, 0);
+        i_subscript();
+        i_storelocal(itervar);
 
         /* finally get around to doing body of loop */
         suite();
 
-        /* todo; increment */
+        /* increment */
+        i_addrlocal(iterpos, 0);
+        VAL(V_IMMED, 1);
+        i_math('+');
+        i_storelocal(iterpos);
 
         /* jump to top of loop at comparison */
-        //i_jmpc(J_UNCOND, (char*)(topofloop - C.codep + C.codeseg - 5)); /* abuse i_jmpc for unconditional neg branch */
-
+        i_jmpc(J_UNCOND, (char*)(topofloop - C.codep + C.codeseg - 5)); /* abuse i_jmpc for unconditional neg branch (5 is this instr size) */
         i_label(labeltest);
     } else if (CURTOKt == KW(if)) {
         SKIP(KW(if));
@@ -1280,7 +1287,7 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
