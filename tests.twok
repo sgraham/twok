@@ -483,7 +483,7 @@ def __main__():
         y = y + x
     return y
     
-### 6 DISABLED simple for 2
+### 6 simple for 2
 def __main__():
     y = 0
     for x in [3, 2, 1]:
