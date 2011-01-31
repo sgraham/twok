@@ -14,3 +14,4 @@ dump.dat
 *.obj
 vsproj/x64
 vsproj/*.user
+*.wwdb
