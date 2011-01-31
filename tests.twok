@@ -489,6 +489,14 @@ def __main__():
     for x in [3, 2, 1]:
         y = y + x
     return y
+    
+### 14 string 0
+def __main__():
+    return len("abcdefghijklmn")
+    
+### 16 string 1
+def __main__():
+    return len("a\bcdefghijklm\n\r\t")
 
 ### 99999 END
 # vim: set ft=python:

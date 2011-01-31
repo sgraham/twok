@@ -206,7 +206,6 @@ extern int twokRun(char *code, void *(*externLookup)(char *name));
 #include <stdlib.h>
 #include <stdarg.h>
 #include <setjmp.h>
-#include <string.h>
 #include <ctype.h>
 #if __unix__ || (__APPLE__ && __MACH__)
     #include <sys/mman.h>
@@ -333,12 +332,6 @@ static void *tba_realloc(void *ptr, size_t size) {
 
     return ret;
 }
-static char *tba_strdup(char* in) {
-    char* p = tba_realloc(0, strlen(in) + 1), *ret = p;
-    while (*in) *p++ = *in++;
-    *p = 0;
-    return ret;
-}
 #define TWOK_FILL_MEM 1
 static void tba_pushcheckpoint() {
     if (tba_stackidx >= tarrsize(tba_stack)) error("too many checkpoints");
@@ -366,7 +359,6 @@ static void tba_popcheckpoint() {
 #define tvindexof(a,i)              ((a) ? (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),tv__tvn(a),sizeof(*(a)))) : -1)
 #define tvcontainsnp(a,i,n,psize)   ((a) ? (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize)!=-1) : 0)
 #define tvcontainsp(a,i,psize)      (tvcontainsnp((a),i,tv__tvn(a),psize))
-#define tvcontainsn(a,i,n)          ((a) ? (tvcontainsnp((a),i,n,sizeof(*(a)))) : 0)
 #define tvcontainsn_nonnull(a,i,n)  (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,sizeof(*(a)))!=-1) /* workaround for stupid warning */
 #define tvcontains(a,i)             ((a) ? (tvcontainsp((a),i,sizeof(*(a)))) : 0)
 
@@ -443,16 +435,20 @@ static void error(char *fmt, ...) {
 
 /* todo; True, False, None? */
 static char KWS[] = " if elif else or for def return extern in and not print pass << >> <= >= == != ";
+static struct { char from, to; } strEscapes[] = {{'\\','\\'}, {'\'','\''}, {'"','"'}, {'b','\b'},{'r','\r'},{'t','\t'},{'n','\n'},{'0','\0'}};
 #define KW(k) ((int)((strstr(KWS, #k " ") - KWS) + T_KW))
-char* strintern(char* s) {
+static char* strintern(char* s) {
     int i;
+    char *copy = 0;
     for (i = 0; i < tvsize(C.strs); ++i)
-        if (strcmp(s, C.strs[i]) == 0)
+        if (strncmp(s, C.strs[i], tvsize(C.strs[i])) == 0)
             return C.strs[i];
-    tvpush(C.strs, tba_strdup(s));
+    while (*s) tvpush(copy, *s++);
+    /* note, not null terminated, use len of array */
+    tvpush(C.strs, copy);
     return tvlast(C.strs);
 }
-enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_INDENT, T_DEDENT };
+enum { T_UNK, T_KW=1<<7, T_IDENT = 1<<8, T_END, T_NL, T_NUM, T_STR, T_INDENT, T_DEDENT };
 #define TOK(t) do { Token _ = { t, (int)(startpos - C.input), { strintern(#t) } }; tvpush(C.tokens, _); } while(0)
 #define TOKI(t, s) do { Token _ = { t, (int)(startpos - C.input), { strintern(s) } }; tvpush(C.tokens, _); } while(0)
 #define TOKN(t, v) do { Token _ = { t, (int)(startpos - C.input), { 0 } }; _.data.tokn=v; tvpush(C.tokens, _); } while(0)
@@ -518,6 +514,19 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
             } else if (*pos == '#') {
                 while (*pos != '\n' && *pos != 0) ++pos;
                 break;
+            } else if (*pos == '\'' || *pos == '\"') {
+                char *str = 0;
+                while (*++pos != *startpos) {
+                    if (*pos == '\\') {
+                        ++pos;
+                        for (i = 0; i < tarrsize(strEscapes); ++i)
+                            if (strEscapes[i].from == *pos)
+                                tvpush(str, strEscapes[i].to);
+                    } else tvpush(str, *pos);
+                }
+                ++pos;
+                tvpush(str, 0);
+                TOKI(T_STR, str);
             } else {
                 char tmp[3] = { 0, 0, 0 };
                 if (!*pos) goto donestream;
@@ -944,6 +953,10 @@ static int atom() {
         VAL(V_IMMED, CURTOK->data.tokn);
         NEXT();
         return 1;
+    } else if (CURTOKt == T_STR) {
+        VAL(V_IMMED, (unsigned long long)CURTOK->data.str);
+        NEXT();
+        return 1;
     } else if (CURTOKt == '@' || CURTOKt == T_IDENT) {
         int i, isaddrof = 0;
         if (CURTOKt == '@') {
@@ -1249,7 +1262,7 @@ static struct NamePtrPair stdlibFuncs[] = {
 static void *stdlibLookup(char *name) {
     struct NamePtrPair *p = stdlibFuncs;
     for (; p->name; ++p)
-        if (strcmp(p->name, name) == 0)
+        if (strncmp(p->name, name, tvsize(name)) == 0)
             return p->func;
     return NULL;
 }
@@ -1277,9 +1290,9 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         { int j;
         for (j = 0; j < tvsize(C.tokens); ++j) {
             if (C.tokens[j].type == T_NUM)
-                printf("%d: %d %lld\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
+                printf("%3d: %3d %lld\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
             else
-                printf("%d: %d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
+                printf("%3d: %3d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
         }}
 #endif
         C.codeseg = C.codep = twok_allocExec(allocSize);
@@ -1296,8 +1309,10 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
 
         entryidx = funcidx("__main__");
         if (entryidx == -1) error("no entry point '__main__'");
-        tba_popcheckpoint();
         ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
+        /* todo; this must be after the run now, only for strings which are tokenized, interned and then referenced by runtime.
+           should fix by copying data strings during compile to somewhere else (end of memory or something?) */
+        tba_popcheckpoint();
     } else {
         tba_popcheckpoint();
         ret = -1;
