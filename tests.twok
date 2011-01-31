@@ -402,8 +402,8 @@ def __main__():
 ### 2 basic list
 def __main__():
     L = 0
-    list_push(@L, 1)
-    list_push(@L, 2)
+    listaddr_push(@L, 1)
+    listaddr_push(@L, 2)
     return len(L)
 
 ### 0 simple mempush/pop
@@ -415,14 +415,14 @@ def __main__():
 def __main__():
     mempush()
     L = 0
-    list_push(@L, 1)
-    list_push(@L, 2)
+    listaddr_push(@L, 1)
+    listaddr_push(@L, 2)
     mempop()
 
 ### 1 list syntax 0
 def __main__():
     L = []
-    list_push(@L, 5)
+    listaddr_push(@L, 5)
     return len(L)
 
 ### 1 list syntax 0
@@ -501,6 +501,31 @@ def __main__():
 ### 960 utf-8 decode
 def __main__():
     return "λ(x) = π"[7]
+
+### 2 dereference
+def __main__():
+    L = [1, 2, 3]
+    x = @L
+    y = x[0]
+    return y[1]
+
+### 10 question in symbols
+def stuff(a?,b,?c,?d?):
+    return a? + b + ?c + ?d?
+def __main__():
+    return stuff(1,2,3,4)
+
+### 13 class 0 FAKE!
+class Stuff: x, y, z
+def __main__():
+    v = [0, 6, 7, 8]
+    return v.Stuff_x + v.Stuff_y
+
+### 1 DISABLED *args
+def blah(one, *args):
+    return one == 1 and len(args) == 5
+def __main__():
+    return blah(1,6,7,8,4,3)
 
 ### 99999 END
 # vim: set ft=python:
