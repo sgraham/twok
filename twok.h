@@ -205,6 +205,7 @@ extern int twokRun(char *code, void *(*externLookup)(char *name));
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 #include <setjmp.h>
 #include <ctype.h>
 #if __unix__ || (__APPLE__ && __MACH__)
@@ -441,10 +442,10 @@ static char* strintern(char* s) {
     int i;
     char *copy = 0;
     for (i = 0; i < tvsize(C.strs); ++i)
-        if (strncmp(s, C.strs[i], tvsize(C.strs[i])) == 0)
+        if (strcmp(s, C.strs[i]) == 0)
             return C.strs[i];
     while (*s) tvpush(copy, *s++);
-    /* note, not null terminated, use len of array */
+    tvpush(copy, 0);
     tvpush(C.strs, copy);
     return tvlast(C.strs);
 }
@@ -901,6 +902,33 @@ static void i_math(int op) {
 #endif
 
 /*
+ * utf-8 decode. based Björn Höhrmann's version
+ */
+static tword *utf8_decode(char *str) {
+    static char decode[] = {
+        0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+        0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x38,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x28,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,204,204,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,188,174,158,158,158,158,158,158,158,158,158,158,158,158,142,126,126,111, 95, 95, 95, 79,207,207,207,207,207,207,207,207,207,207,207,
+        0,1,1,1,8,7,6,4,5,4,3,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,4,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,4,1,1,1,1,1,1,1,1,1,1,1,1,0,1,1,1,8,7,6,4,5,4,3,2,1,1,1,1,
+    };
+    tword *ret = 0;
+    char byte, data, stat = 9;
+    unsigned int unicode = 0;
+    while ((byte = *str++)) {
+        data = decode[(int)byte];
+        stat = decode[256 + (stat << 4) + (data >> 4)];
+        byte = (byte ^ (char)(data << 4));
+        unicode = (unicode << 6) | byte;
+        if (stat == 0) {
+            tvpush(ret, unicode);
+            unicode = 0;
+        }
+        if (stat == 1) error("invalid utf-8");
+    }
+    return ret;
+}
+
+
+/*
  * parsing and intermediate gen
  */
 #define NEXT() do { if (C.curtok >= tvsize(C.tokens)) error("unexpected end of input"); C.curtok++; } while(0)
@@ -916,6 +944,8 @@ static int genlocal() {
 }
 
 static int atom() {
+    char *listpush = strintern("list_push");
+    int pushidx = tvindexof(C.externnames, listpush);
     if (CURTOKt == '(') {
         NEXT();
         or_test();
@@ -928,14 +958,13 @@ static int atom() {
         for (;;) {
             if (CURTOKt == ']') {
                 /* todo; reversed i think */
-                char *listpush = strintern("list_push");
-                int i, numElems = tvsize(C.vst) - initialCount, pushidx = tvindexof(C.externnames, listpush), listtmp = genlocal();
+                int i, numElems = tvsize(C.vst) - initialCount, listtmp = genlocal();
                 NEXT();
                 VAL(V_IMMED, 0);
                 i_storelocal(listtmp);
                 for (i = 0; i < numElems; ++i) {
                                                             /* stack: V */
-                    VAL(V_IMMED, (unsigned long long) C.externaddrs[pushidx]);   /* stack: V, list_push */
+                    VAL(V_IMMED, (unsigned long long)C.externaddrs[pushidx]);   /* stack: V, list_push */
                     g_swap();                               /* stack: list_push, V */
                     i_addrlocal(listtmp, 1);                /* stack: list_push, V, @L */
                     g_swap();                               /* stack: list_push, @L, V */
@@ -954,8 +983,19 @@ static int atom() {
         NEXT();
         return 1;
     } else if (CURTOKt == T_STR) {
-        VAL(V_IMMED, (unsigned long long)CURTOK->data.str);
+        tword *p = utf8_decode(CURTOK->data.str);
+        int i, listtmp = genlocal();
         NEXT();
+        VAL(V_IMMED, 0);
+        i_storelocal(listtmp);
+        for (i = 0; i < tvsize(p); ++i) {
+            VAL(V_IMMED, (unsigned long long)C.externaddrs[pushidx]);
+            i_addrlocal(listtmp, 1);
+            VAL(V_IMMED, p[i]);
+            i_call(2);
+            tvpop(C.vst);
+        }
+        i_addrlocal(listtmp, 0);
         return 1;
     } else if (CURTOKt == '@' || CURTOKt == T_IDENT) {
         int i, isaddrof = 0;
@@ -1304,15 +1344,13 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
-        ret = system("ndisasm -b64 dump.dat > x.asm"); }
+        ret = system("ndisasm -b64 dump.dat"); }
 #endif
 
         entryidx = funcidx("__main__");
         if (entryidx == -1) error("no entry point '__main__'");
-        ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
-        /* todo; this must be after the run now, only for strings which are tokenized, interned and then referenced by runtime.
-           should fix by copying data strings during compile to somewhere else (end of memory or something?) */
         tba_popcheckpoint();
+        ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
     } else {
         tba_popcheckpoint();
         ret = -1;
