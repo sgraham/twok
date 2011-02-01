@@ -769,6 +769,23 @@ static int g_rval(int valid) {
     return reg;
 }
 
+/* emit a jump, returns the location that needs to be fixed up. make a linked
+ * list to previous items that are going to jump to the same final location so
+ * that when the jump target is reached we can fix them all up by walking the
+ * list that we created. */
+static char* i_jmpc(int cond, char* prev) {
+    if (cond == J_UNCOND) {
+        ob(0xe9);
+        outnum32(prev ? prev - C.codeseg : 0);
+    } else {
+        int reg = g_rval(V_REG_ANY);
+        lead2(reg, reg); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
+        ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
+        outnum32(prev ? prev - C.codeseg : 0);
+    }
+    return C.codep - 4;
+}
+
 static void i_func(char *name, char **paramnames, int hasvarargs)
 {
     int i;
@@ -806,7 +823,7 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
         topofloop = C.codep;
 
         ob(0x49); ob(0xff); ob(0xca);   /* dec r10 */
-        i_jmpc(1, topofloop);           /* jnz top of copy loop */
+        //i_jmpc(1, topofloop);           /* jnz top of copy loop */
     }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
@@ -848,23 +865,6 @@ static void i_cmp(int op) {
     ob(0x90 + cmpccs[tvindexofnp(cmpccs, op, 6, 1)].cc);
     ob(0xc0 + vreg_to_enc(into));
     VAL(into, 0);
-}
-
-/* emit a jump, returns the location that needs to be fixed up. make a linked
- * list to previous items that are going to jump to the same final location so
- * that when the jump target is reached we can fix them all up by walking the
- * list that we created. */
-static char* i_jmpc(int cond, char* prev) {
-    if (cond == J_UNCOND) {
-        ob(0xe9);
-        outnum32(prev ? prev - C.codeseg : 0);
-    } else {
-        int reg = g_rval(V_REG_ANY);
-        lead2(reg, reg); ob(0x85); ob(0xc0 + vreg_to_enc(reg) * 9); /* test rXx, rXx */
-        ob(0x0f); ob(0x84 + cond); /* jz/jnz rrr */
-        outnum32(prev ? prev - C.codeseg : 0);
-    }
-    return C.codep - 4;
 }
 
 static void i_label(char* p) {
