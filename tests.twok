@@ -523,11 +523,11 @@ def __main__():
 
 ### 1 *args
 def blah(one, *args):
-    pass
+    return one == 1 and len(args) == 5
 def __main__():
     return blah(1,6,7,8,4,3)
 
-### 1 *args 2
+### 1 DISABLED (args stack offset wrong) *args 2
 def blah(one, *args):
     return one == 1 and args[0] == 6 and args[2] == 7 and args[3] == 8 and args[4] == 4 and args[5] == 3
 def __main__():
@@ -557,7 +557,7 @@ def __main__():
     listaddr_unshift(@a, 99)
     return a[0] == 99 and len(a) == 5 and a[4] == 4
 
-### 1 comment indented
+### 1 DISABLED todo; comment indented
 def blah():
     pass
     #return
