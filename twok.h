@@ -635,8 +635,8 @@ enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 #define outnum64(n) { unsigned long long _ = (unsigned long long)(n); unsigned long long mask = 0xff; unsigned long long sh = 0; int i; for (i = 0; i < 8; ++i) { ob((char)((_&mask)>>sh)); mask <<= 8; sh += 8; } }
 
 typedef struct NativeContext {
-    int spills[64]; /* is the Nth spill location in use? */
-    char *numlocsp;
+    int spills[64] /* is the Nth spill location in use? */, varargsgetsize;
+    char *numlocsp, *varargsget;
     char **paramnames;
 } NativeContext;
 static NativeContext NC;
@@ -645,6 +645,42 @@ static NativeContext NC;
 
 #define put32(p, n) (*(int*)(p) = (n))
 #define get32(p) (*(int*)p)
+
+static void i_setup() {
+    int i;
+    memset(&NC, 0, sizeof(NC));
+    /* generate varargs helper code
+       when we get into a function that has *args, we don't know how many more have been
+       passed at compile time, and some of them may be in registers. by call'ing
+       varargsget + i*varargsgetsize the i'th argument will be put into rax. this also
+       handles the differences between abis for msft vs. sysv.
+
+       code looks like:
+            mov rax, funcArgRegs[0]
+            ret
+            mov rax, funcArgRegs[1]
+            ret
+            ...
+            mov rax, [rbp + 16+8*0]
+            ret
+            mov rax, [rbp + 16+8*1]
+            ret
+            mov rax, [rbp + 16+8*2]
+            ...
+        with each set padded to be varargsgetsize (==8) big.
+    */
+    NC.varargsget = C.codep;
+    NC.varargsgetsize = 8;
+    for (i = 0; i < 64; ++i) { /* up to this many args to func, can be arbitrarily increased */
+        if (i < tarrsize(funcArgRegs)) {
+            lead2(V_REG_RAX, funcArgRegs[i]); ob(0x89); ob(0xc0 + vreg_to_enc(funcArgRegs[i]) * 8); /* mov rax, rXx */
+        } else {
+            ob(0x48); ob(0x8b); ob(0x85); outnum32(16+8*(i - tarrsize(funcArgRegs))); /* mov rax, [ebp + 16*i*8] */
+        }
+        ob(0xc3); /* ret */
+        while ((unsigned long long)C.codep % NC.varargsgetsize != 0) ob(0x90); /* pad with nop */
+    }
+}
 
 static char* functhunkaddr(long long idx) { return C.codesegend - (idx + 1) * FUNC_THUNK_SIZE; }
 static void addfunc(char* name, char* addr) {
@@ -814,16 +850,34 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
          * (r10 - tarrsize(paramnames) + 1), +1 because the *arg is included
          * in the paramnames list */
         char *listpush = strintern("listaddr_push"), *topofloop;
-        int pushidx = tvindexof(C.externnames, listpush);
+        int pushidx = tvindexof(C.externnames, listpush), listptroffset = -8 - 8*(tvsize(paramnames)-1);
         /* load null (empty list) */
         ob(0x48); ob(0xb8); outnum64(0);
-        ob(0x48); ob(0x89); ob(0x85); outnum32(-8 - 8*(tvsize(paramnames)-1));   /* mov [rbp - copyoffset], rax */
+        ob(0x48); ob(0x89); ob(0x85); outnum32(listptroffset);   /* mov [rbp - copyoffset], rax */
 
         ob(0x49); ob(0x81); ob(0xea); outnum32(tvsize(paramnames) - 1); /* sub r10, #named_params */
         topofloop = C.codep;
 
+        /* r10 is the number of args, as set by the caller
+           r11 is used as the jump-to-address for varargsget, see i_setup
+           rax is used to calculate to offset and as the return value to store into *args */
+
+        ob(0x4c); ob(0x89); ob(0xd0); /* mov rax, r10 */
+        ob(0x48); ob(0x6b); ob(0xc0); ob(0x08); /* imul rax, rax, byte +0x8 */
+        ob(0x49); ob(0xbb); outnum64(NC.varargsget); /* mov r11, varargsget */
+        ob(0x49); ob(0x01); ob(0xc3); /* add r11, rax */
+        ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
+
+        /* todo; ah, crap. doesn't work if there's 0 or 1 named params because
+         * we blow them away here */
+
+        lead2(0, funcArgRegs[0]); ob(0x8d); ob(0x85 + vreg_to_enc(funcArgRegs[0]) * 8); outnum32(listptroffset); /* lea funcarg0, [ebp - copyoffset] */
+        lead2(funcArgRegs[1], V_REG_RAX); ob(0x89); ob(0xc0 + vreg_to_enc(funcArgRegs[1])); /* mov funcarg1, rax */
+        ob(0x49); ob(0xbb); outnum64(C.externaddrs[pushidx]); /* mov r11, pushidx */
+        ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
+
         ob(0x49); ob(0xff); ob(0xca);   /* dec r10 */
-        //i_jmpc(1, topofloop);           /* jnz top of copy loop */
+        ob(0x0f); ob(0x85); outnum32(topofloop - C.codep - 4); /* jnz top of copy loop */
     }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
@@ -1024,8 +1078,8 @@ static void addAccessor(char *basename, char *itemname, int index) {
 }
 
 static int atom() {
-    char *listpush = strintern("listaddr_push");
-    int pushidx = tvindexof(C.externnames, listpush);
+    char *listpush = strintern("listaddr_push"), *listrev = strintern("reverse");
+    int pushidx = tvindexof(C.externnames, listpush), revidx = tvindexof(C.externnames, listrev);
     if (CURTOKt == '(') {
         NEXT();
         or_test();
@@ -1037,7 +1091,6 @@ static int atom() {
         or_test();
         for (;;) {
             if (CURTOKt == ']') {
-                /* todo; reversed i think */
                 int i, numElems = tvsize(C.vst) - initialCount, listtmp = genlocal();
                 NEXT();
                 VAL(V_IMMED, 0);
@@ -1051,6 +1104,14 @@ static int atom() {
                     i_call(2);
                     tvpop(C.vst); /* discard */
                 }
+                /* they were parsed onto the stack and then pushed, so they're
+                 * reversed, just reverse() the whole list now. kind of dumb,
+                 * but simple. */
+                VAL(V_IMMED, (unsigned long long)C.externaddrs[revidx]);
+                i_addrlocal(listtmp, 0);
+                i_call(1);
+                tvpop(C.vst); /* discard */
+                /* return */
                 i_addrlocal(listtmp, 0);
             }
             else if (CURTOKt == ',') {
@@ -1390,7 +1451,10 @@ static void fileinput() {
  * builtin functions
  */
 
-static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
+static void tlistPush(tword** L, tword i) {
+    printf("PUSH: %p : %lld", L, i);
+    tvpush(*L, i);
+}
 static void tlistPop(tword* L) { tvpop(L); }
 static int tlistLen(tword* L) { return tvsize(L); }
 static tword *tRange(tword upper) {
@@ -1399,16 +1463,26 @@ static tword *tRange(tword upper) {
     for (i = 0; i < upper; ++i) tvpush(ret, i);
     return ret;
 }
-static void tlistShift(tword* L) {
+static tword tlistShift(tword* L) {
+    tword ret = L[0];
     int i;
     for (i = 0; i < tvsize(L) - 1; ++i) L[i] = L[i + 1];
     tvpop(L);
+    return ret;
 }
 static void tlistUnshift(tword **L, tword v) {
     int i;
     tvpush(*L, -1);
-    for (i = 0; i < tvsize(*L) - 1; ++i) (*L)[i + 1] = (*L)[i];
+    for (i = tvsize(*L) - 2; i >= 0; --i) (*L)[i + 1] = (*L)[i];
     (*L)[0] = v;
+}
+static void tlistReverse(tword *L) {
+    int i;
+    for (i = 0; i < tvsize(L) / 2; ++i) {
+        tword tmp = L[i];
+        L[i] = L[tvsize(L) - 1 - i];
+        L[tvsize(L) - 1 - i] = tmp;
+    }
 }
 
 typedef struct NamePtrPair { char *name; void *func; } NamePtrPair;
@@ -1420,6 +1494,7 @@ static NamePtrPair stdlibFuncs[] = {
     { "mempush", tba_pushcheckpoint },
     { "pop", tlistPop },
     { "range", tRange },
+    { "reverse", tlistReverse },
     { "shift", tlistShift },
 };
 static int strcmpPair(const void *a, const void *b) { return strcmp(((NamePtrPair*)a)->name, ((NamePtrPair*)b)->name); }
@@ -1439,7 +1514,6 @@ static void exportStdlib() {
 int twokRun(char *code, void *(*externLookup)(char *name)) {
     int ret, allocSize, entryidx;
     memset(&C, 0, sizeof(C));
-    memset(&NC, 0, sizeof(NC));
     C.input = code;
     C.externLookup = externLookup;
     allocSize = 1<<17;
@@ -1459,11 +1533,13 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
 #endif
         C.codeseg = C.codep = twok_allocExec(allocSize);
         C.codesegend = C.codeseg + allocSize;
+        i_setup();
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
 #if 1
         { FILE* f = fopen("dump.dat", "wb");
+        //fwrite(C.codeseg + 64*NC.varargsgetsize, 1, C.codep - C.codeseg - 64*NC.varargsgetsize, f);
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
         ret = system("ndisasm -b64 dump.dat"); }
