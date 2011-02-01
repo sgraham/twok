@@ -769,7 +769,7 @@ static int g_rval(int valid) {
     return reg;
 }
 
-static void i_func(char *name, char **paramnames)
+static void i_func(char *name, char **paramnames, int hasvarargs)
 {
     int i;
     while (((unsigned long)C.codep) % 16 != 0) ob(0x90); /* nop to align */
@@ -781,7 +781,7 @@ static void i_func(char *name, char **paramnames)
     NC.paramnames = paramnames;
     /* copy args to shadow location, we put them in "upside down" from how
      * they are on the arg stack */
-    for (i = 0; i < tvsize(paramnames); ++i) {
+    for (i = 0; i < tvsize(paramnames) - hasvarargs; ++i) {
         /* get either from reg, or from stack, depending on index and abi */
         if (i >= tarrsize(funcArgRegs)) {
             ob(0x48); ob(0x8b); ob(0x85); outnum32(16+8*i); /* mov rax, [rbp + argoffset] */
@@ -792,8 +792,25 @@ static void i_func(char *name, char **paramnames)
         /* copy into local location */
         ob(0x48); ob(0x89); ob(0x85); outnum32(-8 - 8*i);   /* mov [rbp - copyoffset], rax */
     }
+    if (hasvarargs) {
+        /* build a list of args that aren't included in our prototype. there's
+         * (r10 - tarrsize(paramnames) + 1), +1 because the *arg is included
+         * in the paramnames list */
+        char *listpush = strintern("listaddr_push"), *topofloop;
+        int pushidx = tvindexof(C.externnames, listpush);
+        /* load null (empty list) */
+        ob(0x48); ob(0xb8); outnum64(0);
+        ob(0x48); ob(0x89); ob(0x85); outnum32(-8 - 8*(tvsize(paramnames)-1));   /* mov [rbp - copyoffset], rax */
+
+        ob(0x49); ob(0x81); ob(0xea); outnum32(tvsize(paramnames) - 1); /* sub r10, #named_params */
+        topofloop = C.codep;
+
+        ob(0x49); ob(0xff); ob(0xca);   /* dec r10 */
+        i_jmpc(1, topofloop);           /* jnz top of copy loop */
+    }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
+
 static void i_extern(char* name) {
     void *p;
     name = strintern(name);
@@ -1091,17 +1108,22 @@ static int arglist() {
 
 static char** parameters() {
     char **ret = 0;
-    if (CURTOKt == T_IDENT) {
+    while (CURTOKt == T_IDENT) {
         tvpush(ret, CURTOK->data.str);
         NEXT();
-    }
-    while (ret && CURTOKt == ',') {
+        if (CURTOKt != ',') break;
         SKIP(',');
-        if (CURTOKt != T_IDENT) error("expecting parameter name");
-        tvpush(ret, CURTOK->data.str);
-        NEXT();
     }
     return ret;
+}
+/* used in conjunction with `parameters' to build a varargs list */
+static int varargs(char ***argnames) {
+    if (CURTOKt == '*') NEXT();
+    else return 0;
+    if (CURTOKt != T_IDENT) error("expecting name of varargs");
+    tvpush(*argnames, CURTOK->data.str);
+    NEXT();
+    return 1;
 }
 
 static int trailer() {
@@ -1336,18 +1358,20 @@ static void toplevel() {
         for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 1);
         /* ctor. general idea is to make a varargs func that returns *args
            with parent and name unshifted onto it */
-        i_func(name, argnames);
+        i_func(name, argnames, 0);
         /* code to assign args to list.  */
         /* maybe just def Stuff(*args): return [Stuff, 0, args] */
         i_endfunc();
     } else {
+        int hasvarargs;
         SKIP(KW(def));
         C.locals = NULL;
         name = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP('(');
         argnames = parameters();
-        i_func(name, argnames);
+        hasvarargs = varargs(&argnames);
+        i_func(name, argnames, hasvarargs);
         SKIP(')');
         suite();
         i_endfunc();
@@ -1438,7 +1462,7 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
+#if 1
         { FILE* f = fopen("dump.dat", "wb");
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
         fclose(f);
