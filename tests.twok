@@ -523,9 +523,46 @@ def __main__():
 
 ### 1 *args
 def blah(one, *args):
-    return one == 1 and len(args) == 5
+    pass
 def __main__():
     return blah(1,6,7,8,4,3)
+
+### 1 *args 2
+def blah(one, *args):
+    return one == 1 and args[0] == 6 and args[2] == 7 and args[3] == 8 and args[4] == 4 and args[5] == 3
+def __main__():
+    return blah(1,6,7,8,4,3)
+
+### 3 list rev
+def __main__():
+    a = [1, 2, 3, 4]
+    reverse(a)
+    return a[1]
+
+### 5 list rev 2
+def __main__():
+    a = [1, 2, 3, 4, 5]
+    reverse(a)
+    return a[0]
+
+### 1 list shift
+def __main__():
+    a = [99, 1, 2, 3, 4, 5]
+    x = shift(a)
+    return x == 99 and len(a) == 5
+
+### 1 list unshift
+def __main__():
+    a = [1, 2, 3, 4]
+    listaddr_unshift(@a, 99)
+    return a[0] == 99 and len(a) == 5 and a[4] == 4
+
+### 1 comment indented
+def blah():
+    pass
+    #return
+def __main__():
+    return blah()
 
 ### 99999 END
 # vim: set ft=python:
