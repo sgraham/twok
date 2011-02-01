@@ -1,4 +1,4 @@
-/* twok-0.10
+ï»¿/* twok-0.10
    Public domain
    Python-styled native-compiling scripting language
    http://h4ck3r.net/#twok
@@ -860,7 +860,13 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
 
         /* r10 is the number of args, as set by the caller
            r11 is used as the jump-to-address for varargsget, see i_setup
-           rax is used to calculate to offset and as the return value to store into *args */
+           rax is used to calculate to offset and as the return value to store into *args
+           r10 is volatile, so we need to save when we call into listaddr_push, and
+           we also need to save the 1st and 2nd func args so we can call listaddr_push
+           but still get them for this function. */
+        ob(0x41); ob(0x52); /* push r10 */
+        ob(0x50 + vreg_to_enc(funcArgRegs[0])); /* push funcarg0 */
+        ob(0x50 + vreg_to_enc(funcArgRegs[1])); /* push funcarg1 */
 
         ob(0x4c); ob(0x89); ob(0xd0); /* mov rax, r10 */
         ob(0x48); ob(0x6b); ob(0xc0); ob(0x08); /* imul rax, rax, byte +0x8 */
@@ -875,6 +881,10 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
         lead2(funcArgRegs[1], V_REG_RAX); ob(0x89); ob(0xc0 + vreg_to_enc(funcArgRegs[1])); /* mov funcarg1, rax */
         ob(0x49); ob(0xbb); outnum64(C.externaddrs[pushidx]); /* mov r11, pushidx */
         ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
+
+        ob(0x58 + vreg_to_enc(funcArgRegs[1])); /* pop funcarg1 */
+        ob(0x58 + vreg_to_enc(funcArgRegs[0])); /* pop funcarg0 */
+        ob(0x41); ob(0x5a); /* pop r10 */
 
         ob(0x49); ob(0xff); ob(0xca);   /* dec r10 */
         ob(0x0f); ob(0x85); outnum32(topofloop - C.codep - 4); /* jnz top of copy loop */
@@ -1026,7 +1036,7 @@ static void i_math(int op) {
 #endif
 
 /*
- * utf-8 decode. based BjÃ¶rn HÃ¶hrmann's version
+ * utf-8 decode. based Björn Höhrmann's version
  */
 static tword *utf8_decode(unsigned char *str) {
     static unsigned char decode[] = {
@@ -1537,7 +1547,7 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
         fileinput();
         if (tvsize(C.vst) != 0) error("internal error, values left on stack");
         /* dump disassembly of generated code, needs ndisasm in path */
-#if 1
+#if 0
         { FILE* f = fopen("dump.dat", "wb");
         //fwrite(C.codeseg + 64*NC.varargsgetsize, 1, C.codep - C.codeseg - 64*NC.varargsgetsize, f);
         fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
