@@ -1036,7 +1036,7 @@ static void i_math(int op) {
 #endif
 
 /*
- * utf-8 decode. based Björn Höhrmann's version
+ * utf-8 decode. based Bjrn Hï¿½hrmann's version
  */
 static tword *utf8_decode(unsigned char *str) {
     static unsigned char decode[] = {
@@ -1461,10 +1461,7 @@ static void fileinput() {
  * builtin functions
  */
 
-static void tlistPush(tword** L, tword i) {
-    printf("PUSH: %p : %lld", L, i);
-    tvpush(*L, i);
-}
+static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
 static void tlistPop(tword* L) { tvpop(L); }
 static int tlistLen(tword* L) { return tvsize(L); }
 static tword *tRange(tword upper) {
