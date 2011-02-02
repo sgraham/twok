@@ -95,29 +95,13 @@ TODO:
 
 
 
-    *args in function parameters:
-
-        def blah(a, b, *args)
-    takes 2+ params and args is an array of the rest of them.
-
-    the called function constructs the args array on entry. in order to know
-    how many arguments were passed, all calls set a hidden parameter (r10 on x64)
-    'al' is used for this on sysv amdx64, but only represents the number of vector
-    regs used, not the total num args. msft doesn't have any indication.
-
-    unfortunately, this convention means that *args funcs aren't callable from C
-    but oh well. could probably write a mini-forwarding function that sets r10 and
-    then jumps to the real function.
-
-    also want unary * for splatting when calling.
-
-
     funcs:
         print
         enumerate
         zip
         format?
         sorted
+    *splat at callsite
     list comprehensions
     pack for passing utf-8 back to C
     arm backend (on android ndk maybe)
@@ -233,6 +217,19 @@ NOTES: (mostly mumbling about internal implementation details)
         - only one arg, not various python since we don't have varargs (yet?)
     for x in blah
         - blah is always a list (as per range(), or [] synax)
+
+    *args in function parameters:
+        def blah(a, b, *args)
+    takes 2+ params and args is an array of the rest of them.
+
+    the called function constructs the args array on entry. in order to know
+    how many arguments were passed, all calls set a hidden parameter (r10 on x64)
+    'al' is used for this on sysv amdx64, but only represents the number of vector
+    regs used, not the total num args. msft doesn't have any indication.
+
+    unfortunately, this convention means that *args funcs aren't callable from C
+    but oh well. could probably write a mini-forwarding function that sets r10 and
+    then jumps to the real function.
 */
 
 #ifndef INCLUDED_TWOK_H
@@ -1447,11 +1444,29 @@ static void toplevel() {
         SKIP(':');
         argnames = parameters();
         for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 1);
-        /* ctor. general idea is to make a varargs func that returns *args
-           with parent and name unshifted onto it */
-        i_func(name, argnames, 0);
-        /* code to assign args to list.  */
-        /* maybe just def Stuff(*args): return [Stuff, 0, args] */
+        /* ctor for struct general idea is to make this function:
+            def <ctorname>(*args):
+                listaddr_unshift(@args, <ctorname>)
+                return args
+        */
+        /* hmm, sort of smells like this should entirely be a simple macro, if we had macros */
+        /*
+        def defstruct(*args):
+            ret = []
+            push(ret, [|
+                def $(args[0])(*args):
+                    listaddr_unshift(@args, $(args[0]))
+                    return args
+                |])
+            for i, a in enumerate(args[1:]):
+            push(ret, [|
+                defaccessor($(args[0]_$(a), i + 1)
+                |])
+
+        defstruct(Stuff, x, y, z)
+        accessor Stuff_x 1
+        */
+        i_func(name, 0, 1);
         i_endfunc();
     } else {
         int hasvarargs;
