@@ -627,8 +627,10 @@ typedef long long tword;
 static int funcArgRegs[] = {
 #if __unix__ || (__APPLE__ && __MACH__)
     V_REG_RDI, V_REG_RSI, V_REG_RDX, V_REG_RCX, V_REG_R8, V_REG_R9
+    #define EXTRASTACK 0
 #elif _WIN32
     V_REG_RCX, V_REG_RDX, V_REG_R8, V_REG_R9
+    #define EXTRASTACK 32
 #endif
 };
 
@@ -654,10 +656,7 @@ static NativeContext NC;
 #define get32(p) (*(int*)p)
 
 static void i_setup() {
-    int i, stackdelta = 0;
-#ifdef _WIN32
-    stackdelta = 32;
-#endif
+    int i, stackdelta = 0 + EXTRASTACK;
     memset(&NC, 0, sizeof(NC));
     /* generate varargs helper code
        when we get into a function that has *args, we don't know how many more have been
@@ -893,9 +892,9 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
         lead2(0, funcArgRegs[0]); ob(0x8d); ob(0x85 + vreg_to_enc(funcArgRegs[0]) * 8); outnum32(listptroffset); /* lea funcarg0, [ebp - copyoffset] */
         lead2(funcArgRegs[1], V_REG_RAX); ob(0x89); ob(0xc0 + vreg_to_enc(funcArgRegs[1])); /* mov funcarg1, rax */
         ob(0x49); ob(0xbb); outnum64(C.externaddrs[pushidx]); /* mov r11, pushidx */
-        if (_WIN32) { ob(0x48); ob(0x83); ob(0xec); ob(0x20); /* sub rsp, 0x20 */ }
+        if (EXTRASTACK) { ob(0x48); ob(0x83); ob(0xec); ob(0x20); /* sub rsp, 0x20 */ }
         ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
-        if (_WIN32) { ob(0x48); ob(0x83); ob(0xc4); ob(0x20); /* add rsp, 0x20 */ }
+        if (EXTRASTACK) { ob(0x48); ob(0x83); ob(0xc4); ob(0x20); /* add rsp, 0x20 */ }
 
         /* restore volatile registers */
         for (i = tarrsize(funcArgRegs) - 1; i >= 0; --i) i_pop(funcArgRegs[i]);
@@ -907,9 +906,9 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
         /* now the list is built, but it's reversed, reverse it in place */
         lead(funcArgRegs[0]); ob(0x8b); ob(0x85 + vreg_to_enc(funcArgRegs[0]) * 8); outnum32(listptroffset); /* mov funcarg0, [ebp - copyoffset] */
         ob(0x49); ob(0xbb); outnum64(C.externaddrs[revidx]); /* mov r11, revidx */
-        if (_WIN32) { ob(0x48); ob(0x83); ob(0xec); ob(0x20); /* sub rsp, 0x20 */ }
+        if (EXTRASTACK) { ob(0x48); ob(0x83); ob(0xec); ob(0x20); /* sub rsp, 0x20 */ }
         ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
-        if (_WIN32) { ob(0x48); ob(0x83); ob(0xc4); ob(0x20); /* add rsp, 0x20 */ }
+        if (EXTRASTACK) { ob(0x48); ob(0x83); ob(0xc4); ob(0x20); /* add rsp, 0x20 */ }
     }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
@@ -989,9 +988,8 @@ static void i_subscript() {
 
 static void i_call(int argcount) {
     int i, stackdelta = (argcount - tarrsize(funcArgRegs)) * 8, argnostack = 1;
-    if (stackdelta < 0) stackdelta = 0;
+    if (stackdelta < 0) stackdelta = 0 + EXTRASTACK;
 #if _WIN32
-    stackdelta += 32; /* shadow stack on msft */
     argnostack = 0;
 #endif
     if (stackdelta > 0) {
