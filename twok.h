@@ -654,7 +654,10 @@ static NativeContext NC;
 #define get32(p) (*(int*)p)
 
 static void i_setup() {
-    int i;
+    int i, stackdelta = 0;
+#ifdef _WIN32
+    stackdelta = 32;
+#endif
     memset(&NC, 0, sizeof(NC));
     /* generate varargs helper code
        when we get into a function that has *args, we don't know how many more have been
@@ -682,7 +685,7 @@ static void i_setup() {
         if (i < tarrsize(funcArgRegs)) {
             lead2(V_REG_RAX, funcArgRegs[i]); ob(0x89); ob(0xc0 + vreg_to_enc(funcArgRegs[i]) * 8); /* mov rax, rXx */
         } else {
-            ob(0x48); ob(0x8b); ob(0x85); outnum32(16+8*(i - tarrsize(funcArgRegs))); /* mov rax, [ebp + 16*i*8] */
+            ob(0x48); ob(0x8b); ob(0x85); outnum32(16+stackdelta+8*(i - tarrsize(funcArgRegs))); /* mov rax, [ebp + x] */
         }
         ob(0xc3); /* ret */
         while ((unsigned long long)C.codep % NC.varargsgetsize != 0) ob(0x90); /* pad with nop */
@@ -829,6 +832,9 @@ static char* i_jmpc(int cond, char* prev) {
     return C.codep - 4;
 }
 
+static void i_push(int reg) { if (reg>=V_REG_R8) ob(0x41); ob(0x50+vreg_to_enc(reg)); }
+static void i_pop(int reg) { if (reg>=V_REG_R8) ob(0x41); ob(0x58+vreg_to_enc(reg)); }
+
 static void i_func(char *name, char **paramnames, int hasvarargs)
 {
     int i;
@@ -856,8 +862,8 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
         /* build a list of args that aren't included in our prototype. there's
          * (r10 - tarrsize(paramnames) + 1), +1 because the *arg is included
          * in the paramnames list */
-        char *listpush = strintern("listaddr_push"), *topofloop;
-        int pushidx = tvindexof(C.externnames, listpush), listptroffset = -8 - 8*(tvsize(paramnames)-1);
+        char *listpush = strintern("listaddr_push"), *listrev = strintern("reverse"), *topofloop;
+        int pushidx = tvindexof(C.externnames, listpush), revidx = tvindexof(C.externnames, listrev), listptroffset = -8 - 8*(tvsize(paramnames)-1);
         /* load null (empty list) */
         ob(0x48); ob(0xb8); outnum64(0);
         ob(0x48); ob(0x89); ob(0x85); outnum32(listptroffset);   /* mov [rbp - copyoffset], rax */
@@ -871,30 +877,39 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
            r10 is volatile, so we need to save when we call into listaddr_push, and
            we also need to save the 1st and 2nd func args so we can call listaddr_push
            but still get them for this function. */
+        /* push all volatile regs that are used in func calls so that we can call
+           the list push function in C, and also r10 */
         ob(0x41); ob(0x52); /* push r10 */
-        ob(0x50 + vreg_to_enc(funcArgRegs[0])); /* push funcarg0 */
-        ob(0x50 + vreg_to_enc(funcArgRegs[1])); /* push funcarg1 */
+        for (i = 0; i < tarrsize(funcArgRegs); ++i) i_push(funcArgRegs[i]);
 
+        /* get then Nth argument */
         ob(0x4c); ob(0x89); ob(0xd0); /* mov rax, r10 */
         ob(0x48); ob(0x6b); ob(0xc0); ob(0x08); /* imul rax, rax, byte +0x8 */
         ob(0x49); ob(0xbb); outnum64(NC.varargsget); /* mov r11, varargsget */
         ob(0x49); ob(0x01); ob(0xc3); /* add r11, rax */
         ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
 
-        /* todo; ah, crap. doesn't work if there's 0 or 1 named params because
-         * we blow them away here */
-
+        /* call listaddr_push to add to the *args array */
         lead2(0, funcArgRegs[0]); ob(0x8d); ob(0x85 + vreg_to_enc(funcArgRegs[0]) * 8); outnum32(listptroffset); /* lea funcarg0, [ebp - copyoffset] */
         lead2(funcArgRegs[1], V_REG_RAX); ob(0x89); ob(0xc0 + vreg_to_enc(funcArgRegs[1])); /* mov funcarg1, rax */
         ob(0x49); ob(0xbb); outnum64(C.externaddrs[pushidx]); /* mov r11, pushidx */
+        if (_WIN32) { ob(0x48); ob(0x83); ob(0xec); ob(0x20); /* sub rsp, 0x20 */ }
         ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
+        if (_WIN32) { ob(0x48); ob(0x83); ob(0xc4); ob(0x20); /* add rsp, 0x20 */ }
 
-        ob(0x58 + vreg_to_enc(funcArgRegs[1])); /* pop funcarg1 */
-        ob(0x58 + vreg_to_enc(funcArgRegs[0])); /* pop funcarg0 */
+        /* restore volatile registers */
+        for (i = tarrsize(funcArgRegs) - 1; i >= 0; --i) i_pop(funcArgRegs[i]);
         ob(0x41); ob(0x5a); /* pop r10 */
 
         ob(0x49); ob(0xff); ob(0xca);   /* dec r10 */
         ob(0x0f); ob(0x85); outnum32(topofloop - C.codep - 4); /* jnz top of copy loop */
+
+        /* now the list is built, but it's reversed, reverse it in place */
+        lead(funcArgRegs[0]); ob(0x8b); ob(0x85 + vreg_to_enc(funcArgRegs[0]) * 8); outnum32(listptroffset); /* mov funcarg0, [ebp - copyoffset] */
+        ob(0x49); ob(0xbb); outnum64(C.externaddrs[revidx]); /* mov r11, revidx */
+        if (_WIN32) { ob(0x48); ob(0x83); ob(0xec); ob(0x20); /* sub rsp, 0x20 */ }
+        ob(0x41); ob(0xff); ob(0xd3); /* call r11 */
+        if (_WIN32) { ob(0x48); ob(0x83); ob(0xc4); ob(0x20); /* add rsp, 0x20 */ }
     }
     VAL(V_IMMED, 0); /* for fall off ret */
 }
@@ -1468,7 +1483,9 @@ static void fileinput() {
  * builtin functions
  */
 
-static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
+static void tlistPush(tword** L, tword i) {
+    tvpush(*L, i);
+}
 static void tlistPop(tword* L) { tvpop(L); }
 static int tlistLen(tword* L) { return tvsize(L); }
 static tword *tRange(tword upper) {

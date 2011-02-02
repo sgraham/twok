@@ -518,7 +518,7 @@ def __main__():
 ### 13 class 0 FAKE!
 class Stuff: x, y, z
 def __main__():
-    v = [0, 6, 7, 8]
+    v = [0, 6, 7, 8]  # should be Stuff(6,7,8)
     return v.Stuff_x + v.Stuff_y
 
 ### 1 *args
@@ -527,9 +527,9 @@ def blah(one, *args):
 def __main__():
     return blah(1,6,7,8,4,3)
 
-### 1 DISABLED (args stack offset wrong) *args 2
+### 1 *args 2
 def blah(one, *args):
-    return one == 1 and args[0] == 6 and args[2] == 7 and args[3] == 8 and args[4] == 4 and args[5] == 3
+    return one == 1 and args[0] == 6 and args[1] == 7 and args[2] == 8 and args[3] == 4 and args[4] == 3
 def __main__():
     return blah(1,6,7,8,4,3)
 
