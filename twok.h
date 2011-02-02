@@ -47,6 +47,9 @@ TODO:
 
         and how does indent/dedent work?
 
+        probably return a list of [| |] blocks
+        possibly use { } instead since we don't have dict
+
     structs:
 
         struct Stuff: x, y, z
@@ -97,7 +100,7 @@ TODO:
 
     funcs:
         print
-        enumerate
+        enumerate (need tuple unpack for that...)
         zip
         format?
         sorted
@@ -110,6 +113,7 @@ TODO:
 
     dupe getReg calls in g_rval
     share genlocal and atom.T_IDENT
+    varargs code has duplication and ickiness
 
 
 NOTES: (mostly mumbling about internal implementation details)
