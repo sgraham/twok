@@ -371,7 +371,7 @@ def stuff(x, y):
 def __main__():
     return stuff(10, 100)
 
-### -1 bad indent
+### 1234 extra indent
 # note, whitespace after return stmt, indented
 def __main__():
     return 1234
@@ -557,12 +557,38 @@ def __main__():
     listaddr_unshift(@a, 99)
     return a[0] == 99 and len(a) == 5 and a[4] == 4
 
-### 1 DISABLED todo; comment indented
+### 0 comment indented
 def blah():
     pass
-    #return
+    # stuff
 def __main__():
     return blah()
 
+### 0 comment indented 2
+def blah():
+    pass
+  # stuff
+def __main__():
+    return blah()
+
+### 0 comment indented 3
+def blah():
+    pass
+# stuff
+def __main__():
+    return blah()
+
+### 0 ws indented
+# note whitespace indented to match indent of 'pass' below
+def blah():
+    pass
+    
+def __main__():
+    return blah()
+    
+### 0 spaces after end
+def __main__():              
+    pass
+    
 ### 99999 END
 # vim: set ft=python:

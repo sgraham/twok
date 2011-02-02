@@ -511,6 +511,14 @@ static void tokenize() {
     int *indents = 0;
     char *ident = 0, *tempident = 0;
 
+    while (*pos) {
+        if (*pos == '#')
+            while (*pos && *pos != '\n') *pos++ = ' ';
+        else pos++;
+    }
+
+    pos = C.input;
+
     tvpush(indents, 0);
 
     for (;;) {
@@ -525,10 +533,11 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
             return;
         }
 
-        if (*pos == '#' || *pos == '\r' || *pos == '\n') {
-            if (*pos == '#') while (*pos++ != '\n') {}
-            else ++pos;
+        if (*pos == '\r' || *pos == '\n') {
+            ++pos;
+            continue;
         }
+
         while (column < tvlast(indents)) {
             if (!tvcontains(indents, column)) error("unindent does not match any outer indentation level");
             tvpop(indents);
@@ -541,6 +550,7 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
 
         while (*pos != '\n') {
             while (*pos == ' ') ++pos;
+            if (*pos == '\n') break;
             startpos = pos;
             ident = NULL;
             tok = *pos;
@@ -562,9 +572,6 @@ donestream: for (i = 1; i < tvsize(indents); ++i)
                     TOKI(tok, ident);
                     tempident = NULL;
                 }
-            } else if (*pos == '#') {
-                while (*pos != '\n' && *pos != 0) ++pos;
-                break;
             } else if (*pos == '\'' || *pos == '\"') {
                 char *str = 0;
                 while (*++pos != *startpos) {
