@@ -869,6 +869,7 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
         ob(0x48); ob(0x89); ob(0x85); outnum32(listptroffset);   /* mov [rbp - copyoffset], rax */
 
         ob(0x49); ob(0x81); ob(0xea); outnum32(tvsize(paramnames) - 1); /* sub r10, #named_params */
+        /* r10 is now the number of *args, not their index */
         topofloop = C.codep;
 
         /* r10 is the number of args, as set by the caller
@@ -884,6 +885,9 @@ static void i_func(char *name, char **paramnames, int hasvarargs)
 
         /* get then Nth argument */
         ob(0x4c); ob(0x89); ob(0xd0); /* mov rax, r10 */
+        /* convert from counter to index. first -1 removes *arg from
+         * list, second is because counter is post-decremented */
+        ob(0x48); ob(0x05); outnum32(tvsize(paramnames) - 1 - 1); /* add rax, N */
         ob(0x48); ob(0x6b); ob(0xc0); ob(0x08); /* imul rax, rax, byte +0x8 */
         ob(0x49); ob(0xbb); outnum64(NC.varargsget); /* mov r11, varargsget */
         ob(0x49); ob(0x01); ob(0xc3); /* add r11, rax */
@@ -1057,7 +1061,7 @@ static void i_math(int op) {
 #endif
 
 /*
- * utf-8 decode. based Bjrn H�hrmann's version
+ * utf-8 decode. based Bjoern Hoehrmann's version
  */
 static tword *utf8_decode(unsigned char *str) {
     static unsigned char decode[] = {
@@ -1441,36 +1445,25 @@ static void toplevel() {
         NEXT();
         SKIP(T_NL);
     } else if (CURTOKt == KW(class)) {
-        int i;
+        char *listunshift = strintern("listaddr_unshift"), **fakeargs = 0, *argsstr = strintern("args");
+        int i, unshiftidx = tvindexof(C.externnames, listunshift);
         SKIP(KW(class));
         name = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP(':');
         argnames = parameters();
-        for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 1);
+        for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 0);
+        /* hmm, sort of smells like this should entirely be a simple macro, once there's macros */
         /* ctor for struct general idea is to make this function:
             def <ctorname>(*args):
                 listaddr_unshift(@args, <ctorname>)
                 return args
         */
-        /* hmm, sort of smells like this should entirely be a simple macro, if we had macros */
-        /*
-        def defstruct(*args):
-            ret = []
-            push(ret, [|
-                def $(args[0])(*args):
-                    listaddr_unshift(@args, $(args[0]))
-                    return args
-                |])
-            for i, a in enumerate(args[1:]):
-            push(ret, [|
-                defaccessor($(args[0]_$(a), i + 1)
-                |])
-
-        defstruct(Stuff, x, y, z)
-        accessor Stuff_x 1
-        */
-        i_func(name, 0, 1);
+        tvpush(fakeargs, argsstr);
+        i_func(name, fakeargs, 1);
+        (void)unshiftidx;
+        i_addrparam(0, 0);
+        i_ret();
         i_endfunc();
     } else {
         int hasvarargs;
@@ -1500,9 +1493,7 @@ static void fileinput() {
  * builtin functions
  */
 
-static void tlistPush(tword** L, tword i) {
-    tvpush(*L, i);
-}
+static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
 static void tlistPop(tword* L) { tvpop(L); }
 static int tlistLen(tword* L) { return tvsize(L); }
 static tword *tRange(tword upper) {

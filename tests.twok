@@ -515,10 +515,10 @@ def stuff(a?,b,?c,?d?):
 def __main__():
     return stuff(1,2,3,4)
 
-### 13 class 0 FAKE!
+### 1100 class 0
 class Stuff: x, y, z
 def __main__():
-    v = [0, 6, 7, 8]  # should be Stuff(6,7,8)
+    v = Stuff(100, 1000, 10000)
     return v.Stuff_x + v.Stuff_y
 
 ### 1 *args
@@ -532,6 +532,18 @@ def blah(one, *args):
     return one == 1 and args[0] == 6 and args[1] == 7 and args[2] == 8 and args[3] == 4 and args[4] == 3
 def __main__():
     return blah(1,6,7,8,4,3)
+
+### 1 *args 3
+def blah(a,b,c,d,*efg):
+    return a==10 and b==20 and c==30 and d==40 and len(efg) == 3 and efg[1] == 60
+def __main__():
+    return blah(10, 20, 30, 40, 50, 60, 70)
+
+### 1 *args 4
+def blah(*args):
+    return len(args) == 3 and args[1] == 20 and args[2] == 30
+def __main__():
+    return blah(10, 20, 30)
 
 ### 3 list rev
 def __main__():
