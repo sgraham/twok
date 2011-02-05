@@ -365,7 +365,8 @@ def stuff(x):
 def __main__():
     return stuff(4)
 
-### 1344 DISABLED func args 2
+### 1344 func args 2
+extern test1
 def stuff(x, y):
     return x + y + test1(1, 2, 3, 4)
 def __main__():
@@ -453,7 +454,7 @@ def fib(n):
 def __main__():
     return fib(13)
 
-### 102334155 DISABLED fib(40)
+### 102334155 DISABLED (just a bit too slow) fib(40)
 def fib(n):
     if n <= 0:
         return 0
