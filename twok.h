@@ -707,7 +707,7 @@ static int funcidx(char* name) { char* p = strintern(name); return tvindexof(C.f
 
 /* store the given register (offset) into the given stack slot */
 static void g_storespill(int reg, int slot) {
-    lead(reg); ob(0x89); ob(0x85 + vreg_to_enc(reg));
+    lead2(0, reg); ob(0x89); ob(0x85 + vreg_to_enc(reg) * 8);
     outnum32((-1 - slot - tvsize(NC.paramnames) - tvsize(C.locals)) * REG_SIZE);
 }
 
