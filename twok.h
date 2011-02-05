@@ -33,7 +33,8 @@ TODO:
         zip
         format?
         sorted
-    simple HTTP POST-based repl
+    simple HTTP POST-based repl (exists, doesn't do anything)
+    fix '<tok>' expected error to print something useful
     closures?
     JIT debugging integration with GDB 7.1+
     *splat at callsite
@@ -1335,7 +1336,7 @@ static void expr_stmt() {
 }
 
 static void stmt() {
-    char *labeldone = 0, *labeltest = 0;
+    char *labeldone = 0, *labeltest = 0, **argnames, *name;
     if (CURTOKt == KW(return)) {
         SKIP(KW(return));
         if (CURTOKt == T_NL || CURTOKt == T_DEDENT) VAL(V_IMMED, 20710);
@@ -1412,24 +1413,7 @@ static void stmt() {
             }
         }
         i_label(labeldone);
-    }
-    else if (CURTOKt == T_NL) error("bad indent");
-    else expr_stmt();
-}
-
-static void suite() {
-    SKIP(':');
-    SKIP(T_NL);
-    SKIP(T_INDENT);
-    stmt();
-    while (CURTOKt != T_DEDENT)
-        stmt();
-    SKIP(T_DEDENT);
-}
-
-static void toplevel() {
-    char **argnames, *name;
-    if (CURTOKt == KW(extern)) {
+    } else if (CURTOKt == KW(extern)) {
         SKIP(KW(extern));
         i_extern(CURTOK->data.str);
         NEXT();
@@ -1476,7 +1460,7 @@ static void toplevel() {
         i_cmp(KW(==));
         i_ret();
         i_endfunc();
-    } else {
+    } else if (CURTOKt == KW(def)) {
         int hasvarargs;
         SKIP(KW(def));
         C.locals = NULL;
@@ -1489,13 +1473,24 @@ static void toplevel() {
         SKIP(')');
         suite();
         i_endfunc();
-    }
+    } else if (CURTOKt == T_NL) error("bad indent");
+    else expr_stmt();
+}
+
+static void suite() {
+    SKIP(':');
+    SKIP(T_NL);
+    SKIP(T_INDENT);
+    stmt();
+    while (CURTOKt != T_DEDENT)
+        stmt();
+    SKIP(T_DEDENT);
 }
 
 static void fileinput() {
     while (CURTOKt != T_END) {
         if (CURTOKt == T_NL) NEXT();
-        else toplevel();
+        else stmt();
     }
     SKIP(T_END);
 }
