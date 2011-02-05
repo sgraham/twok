@@ -80,7 +80,11 @@ int main(int argc, char** argv)
 {
     int i = 0, ret, failCount = 0, passCount = 0, disabledCount = 0, failed, verbose = 0;
     int expectedRC;
-    FILE* f = fopen("tests.twok", "rb");
+    FILE* f = fopen(
+    #ifdef _WIN32 /* hack for easier running from vs */
+        "..\\"
+    #endif
+        "tests.twok", "rb");
     char* src = testdata;
     char* dest, *desc;
     ret = /* warning suppress */ (int)fread(src, 1, 1<<24, f);
