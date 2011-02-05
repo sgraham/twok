@@ -273,6 +273,9 @@ extern int twokRun(char *code, void *(*externLookup)(char *name));
         #pragma intrinsic(_BitScanForward)
         static int twok_CTZ(int x) { unsigned long ret; _BitScanForward(&ret, x); return ret; }
         #define strtoll _strtoi64
+        #ifdef _MSC_VER
+            #pragma warning(disable: 4324 4053 4204 4127 4244 4305 4152 4055 4706 4702)
+        #endif
     #endif
 #endif
 
@@ -478,7 +481,6 @@ static void error(char *fmt, ...) {
     strcat(C.errorText, tmp);
     strcat(C.errorText, "\n");
     longjmp(C.errBuf, 1);
-    va_end(ap);
 }
 
 /*
@@ -1445,24 +1447,45 @@ static void toplevel() {
         NEXT();
         SKIP(T_NL);
     } else if (CURTOKt == KW(class)) {
-        char *listunshift = strintern("listaddr_unshift"), **fakeargs = 0, *argsstr = strintern("args");
+        char *listunshift = strintern("listaddr_unshift"), **fakeargs = 0, *argsstr = strintern("args"), *pname = 0;
         int i, unshiftidx = tvindexof(C.externnames, listunshift);
         SKIP(KW(class));
         name = CURTOK->data.str;
         SKIP(T_IDENT);
         SKIP(':');
         argnames = parameters();
-        for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 0);
+        for (i = 0; i < tvsize(argnames); ++i) addAccessor(name, argnames[i], i + 1);
         /* hmm, sort of smells like this should entirely be a simple macro, once there's macros */
-        /* ctor for struct general idea is to make this function:
+        /* ctor for struct general idea is to make these functions:
             def <ctorname>(*args):
                 listaddr_unshift(@args, <ctorname>)
                 return args
         */
         tvpush(fakeargs, argsstr);
         i_func(name, fakeargs, 1);
-        (void)unshiftidx;
+
+        /* unshift ctor index onto args */
+        VAL(V_IMMED, (unsigned long long)C.externaddrs[unshiftidx]);
+        i_addrparam(0, 1);
+        VAL(V_IMMED, tvindexof(C.funcnames, name));
+        i_call(2);
+        /* unshift returns list, we return that */
+        i_ret();
+        i_endfunc();
+
+        /* predicate function for testing type equality. equiv to
+            def <ctorname>?(obj):
+                return obj[0] == <ctorname>
+        */
+        for (i = 0; i < tvsize(name) - 1; ++i) tvpush(pname, name[i]);
+        tvpush(pname, '?'); tvpush(pname, '\0');
+        pname = strintern(pname);
+        i_func(pname, fakeargs, 0);
         i_addrparam(0, 0);
+        VAL(V_IMMED, 0);
+        i_subscript();
+        VAL(V_IMMED, tvindexof(C.funcnames, name));
+        i_cmp(KW(==));
         i_ret();
         i_endfunc();
     } else {
@@ -1493,7 +1516,7 @@ static void fileinput() {
  * builtin functions
  */
 
-static void tlistPush(tword** L, tword i) { tvpush(*L, i); }
+static tword* tlistPush(tword** L, tword i) { tvpush(*L, i); return *L; }
 static void tlistPop(tword* L) { tvpop(L); }
 static int tlistLen(tword* L) { return tvsize(L); }
 static tword *tRange(tword upper) {
@@ -1509,11 +1532,12 @@ static tword tlistShift(tword* L) {
     tvpop(L);
     return ret;
 }
-static void tlistUnshift(tword **L, tword v) {
+static tword* tlistUnshift(tword **L, tword v) {
     int i;
     tvpush(*L, -1);
     for (i = tvsize(*L) - 2; i >= 0; --i) (*L)[i + 1] = (*L)[i];
     (*L)[0] = v;
+    return *L;
 }
 static void tlistReverse(tword *L) {
     int i;

@@ -516,12 +516,39 @@ def stuff(a?,b,?c,?d?):
 def __main__():
     return stuff(1,2,3,4)
 
-### 1100 class 0
-class Stuff: x, y, z
+### 0 comment indented
+def blah():
+    pass
+    # stuff
 def __main__():
-    v = Stuff(100, 1000, 10000)
-    return v.Stuff_x + v.Stuff_y
+    return blah()
 
+### 0 comment indented 2
+def blah():
+    pass
+  # stuff
+def __main__():
+    return blah()
+
+### 0 comment indented 3
+def blah():
+    pass
+# stuff
+def __main__():
+    return blah()
+
+### 0 ws indented
+# note whitespace indented to match indent of 'pass' below
+def blah():
+    pass
+    
+def __main__():
+    return blah()
+    
+### 0 spaces after end
+def __main__():              
+    pass
+    
 ### 1 *args
 def blah(one, *args):
     return one == 1 and len(args) == 5
@@ -570,38 +597,25 @@ def __main__():
     listaddr_unshift(@a, 99)
     return a[0] == 99 and len(a) == 5 and a[4] == 4
 
-### 0 comment indented
-def blah():
-    pass
-    # stuff
+### 1100 class 0
+class Stuff: x, y, z
 def __main__():
-    return blah()
-
-### 0 comment indented 2
-def blah():
-    pass
-  # stuff
-def __main__():
-    return blah()
-
-### 0 comment indented 3
-def blah():
-    pass
-# stuff
-def __main__():
-    return blah()
-
-### 0 ws indented
-# note whitespace indented to match indent of 'pass' below
-def blah():
-    pass
+    v = Stuff(100, 1000, 10000)
+    return v.Stuff_x + v.Stuff_y
     
+### 1 class 1
+class Stuff: x, y, z
 def __main__():
-    return blah()
-    
-### 0 spaces after end
-def __main__():              
-    pass
-    
+    v = Stuff(100, 1000, 10000)
+    return Stuff?(v)
+
+### 0 class 2
+class Stuff: x, y, z
+class Things: x, y, z
+def __main__():
+    a = Stuff(100, 1000, 10000)
+    b = Things(100, 1000, 10000)
+    return Stuff?(b) or Things?(a)
+
 ### 99999 END
 # vim: set ft=python:
