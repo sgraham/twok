@@ -26,6 +26,28 @@ ABOUT:
 
 TODO:
 
+    refactor asm generation
+    funcs:
+        print
+        enumerate (need tuple unpack for that...)
+        zip
+        format?
+        sorted
+    simple HTTP POST-based repl
+    closures?
+    JIT debugging integration with GDB 7.1+
+    *splat at callsite
+    maybe derived (contained) structs
+    list comprehensions
+    pack for passing utf-8 back to C
+    arm backend (on android ndk maybe)
+    uninit var tracking (maybe optional?)
+    more tests for various math/expr ops
+
+    dupe getReg calls in g_rval
+    share genlocal and atom.T_IDENT
+    varargs code has duplication and ickiness
+
     only way to dereference right now is blah[0] which is ugly
     probably unary * would do, but wait to see how structs might work
     perhaps fixable by macro? might be too complicated for the macros
@@ -50,70 +72,6 @@ TODO:
         probably return a list of [| |] blocks
         possibly use { } instead since we don't have dict
 
-    structs:
-
-        struct Stuff: x, y, z
-        makes function Stuff(a,b,c) which pushes @Stuff,0,a,b,c onto list and returns it
-
-            struct Stuff: x, y, z
-            def __main__():
-                v = Stuff(6, 7, 8)
-                return v.Stuff_x + v.Stuff_y
-
-        can't be just .x and .y without doing a runtime lookup, e.g.:
-            struct A: x, y
-            struct B: y, x
-        then
-            def doit(val):
-                # what's this return?
-                return val.x
-
-        so,
-            struct Pos: x, y
-            struct Pos3d(Pos): z
-
-            p = Pos(1, 2)
-            p3d = Pos3d(1, 2, 3)
-            Pos?(p) == 1
-            Pos3d?(p3d) == 1
-            Pos3d?(p) == 0
-
-            return p.Pos_x = p.Pos_y        # etc.
-
-        makes a list with 2 extra elements, first is pointer to ctor function, second is
-        pointer to parent's predicate function.
-
-        i.e., the predicate functions do:
-            if S[0] == MyType: return 1
-            if S[1]: return S[1](S)
-            return 0
-
-        possibly use 'class' or 'with' instead of struct because it's highlighted
-        when using python syntax highlighting. 'class' is quite different than what
-        we're actually doing, 'with' looks a bit weird, but might be better to
-        distinguish it.
-        
-        --> yah, i think "class" because lack of syntax highlighting sucks
-        and we might want to use 'with' for scope enter/leave.
-
-
-
-    funcs:
-        print
-        enumerate (need tuple unpack for that...)
-        zip
-        format?
-        sorted
-    *splat at callsite
-    list comprehensions
-    pack for passing utf-8 back to C
-    arm backend (on android ndk maybe)
-    uninit var tracking (maybe optional?)
-    more tests for various math/expr ops
-
-    dupe getReg calls in g_rval
-    share genlocal and atom.T_IDENT
-    varargs code has duplication and ickiness
 
 
 NOTES: (mostly mumbling about internal implementation details)
@@ -234,6 +192,29 @@ NOTES: (mostly mumbling about internal implementation details)
     unfortunately, this convention means that *args funcs aren't callable from C
     but oh well. could probably write a mini-forwarding function that sets r10 and
     then jumps to the real function.
+
+
+    structs:
+
+        class Stuff: x, y, z
+        makes function Stuff(a,b,c) which pushes @Stuff,0,a,b,c onto list and returns it
+
+            struct Stuff: x, y, z
+            def __main__():
+                v = Stuff(6, 7, 8)
+                return v.Stuff_x + v.Stuff_y
+
+        can't be just .x and .y without doing a runtime lookup, e.g.:
+            struct A: x, y
+            struct B: y, x
+        then
+            def doit(val):
+                # what's this return?
+                return val.x
+
+        Also, Stuff? which is a predicate function. There's no 'derived' types yet.
+
+
 */
 
 #ifndef INCLUDED_TWOK_H
