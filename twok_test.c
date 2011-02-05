@@ -87,6 +87,13 @@ int main(int argc, char** argv)
         "tests.twok", "rb");
     char* src = testdata;
     char* dest, *desc;
+
+    if (argc >= 2 && strcmp(argv[1], "--http-repl") == 0)
+    {
+        twokHttpRepl(getExternFunc);
+        return 0;
+    }
+
     ret = /* warning suppress */ (int)fread(src, 1, 1<<24, f);
     if (argc >= 2 && strcmp(argv[1], "-v") == 0)
     {

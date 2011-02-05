@@ -225,6 +225,7 @@ extern "C" {
 #endif
 
 extern int twokRun(char *code, void *(*externLookup)(char *name));
+extern void twokHttpRepl(void *(*externLookup)(char *name));
 
 #ifdef __cplusplus
 }
@@ -240,6 +241,12 @@ extern int twokRun(char *code, void *(*externLookup)(char *name));
 #include <string.h>
 #include <setjmp.h>
 #include <ctype.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #if __unix__ || (__APPLE__ && __MACH__)
     #include <sys/mman.h>
     static void* twok_allocExec(int size) { void* p = mmap(0, size, PROT_EXEC | PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); memset(p, 0x90, size); return p; }
@@ -1553,7 +1560,7 @@ static void exportStdlib() {
 }
 
 /*
- * main api entry point
+ * main api entry points
  */
 int twokRun(char *code, void *(*externLookup)(char *name)) {
     int ret, allocSize, entryidx;
@@ -1599,6 +1606,43 @@ int twokRun(char *code, void *(*externLookup)(char *name)) {
     }
     twok_freeExec(C.codeseg, allocSize);
     return ret;
+}
+
+void twokHttpRepl(void *(*externLookup)(char *name)) {
+    int sockfd, newfd, rv, yes=1, numbytes;
+    struct addrinfo hints, *servinfo;
+    struct sockaddr_storage theirAddr; /* connector's address information */
+    (void)(externLookup);
+
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE; /* use my IP */
+    if ((rv = getaddrinfo(NULL, "20710", &hints, &servinfo)) != 0) error("getaddrinfo");
+    if ((sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol)) == -1) error("socket");
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) error("setsockopt");
+    if (bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) == -1) error("bind");
+    freeaddrinfo(servinfo);
+    if (listen(sockfd, 2) == -1) error("listen");
+    printf("Do:\n    curl -d \"code\" localhost:20710/\nor:\n    curl -d @filename localhost:20710/\nto eval code. Shutdown with:\n    curl -d \"\" localhost:20710/quit\n");
+    for (;;) {
+        socklen_t sinsize = sizeof(theirAddr);
+        char buf[32768], *p;
+        newfd = accept(sockfd, (struct sockaddr *)&theirAddr, &sinsize);
+        if (newfd == -1) error("accept");
+        if ((numbytes = recv(newfd, buf, sizeof(buf)-1, 0)) == -1) error("recv");
+        buf[numbytes] = 0;
+        p = strstr(buf, "\r\n\r\n");
+        if (!p) error("bad input");
+        p += 4;
+        if (strncmp(&buf[5], "/ ", 2) == 0) {
+            /* hmm, need global scope code to run non-__main__ funcs */
+        } else if (strncmp(&buf[5], "/quit ", 6) == 0) {
+            if (send(newfd, "Shutting down.\r\n", 16, 0) == -1) error("send");
+            break;
+        }
+        close(newfd);
+    }
 }
 
 #endif /* TWOK_DEFINE_IMPLEMENTATION */
