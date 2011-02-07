@@ -268,6 +268,29 @@ extern void twokHttpRepl(void *(*externLookup)(char *name));
     #endif
 #endif
 
+/* this is the GDB<->JIT interface */
+typedef enum { JIT_NOACTION = 0, JIT_REGISTER_FN, JIT_UNREGISTER_FN } jit_actions_t;
+struct jit_code_entry {
+    struct jit_code_entry *next_entry;
+    struct jit_code_entry *prev_entry;
+    const char *symfile_addr;
+    uint64_t symfile_size;
+};
+
+/* Make sure to specify the version statically, because the
+debugger may check the version before we can set it.  */
+struct jit_descriptor {
+    uint32_t version;
+    /* This type should be jit_actions_t, but we use uint32_t
+       to be explicit about the bitwidth.  */
+    uint32_t action_flag;
+    struct jit_code_entry *relevant_entry;
+    struct jit_code_entry *first_entry;
+} __jit_debug_descriptor = { 1, 0, 0, 0 };
+     
+/* GDB puts a breakpoint in this function.  */
+void __attribute__((noinline)) __jit_debug_register_code() { };
+
 typedef struct Token {
     int type, pos;
     union {
@@ -397,7 +420,7 @@ static void tba_popcheckpoint() {
 #define tvpush(a,v)                 (tv__tvmaybegrow(a,1), (a)[tv__tvn(a)++] = (v))
 #define tvpop(a)                    (((tv__tvn(a) > 0)?((void)0):error("assert")), tv__tvn(a)-=1)
 #define tvsize(a)                   ((a) ? tv__tvn(a) : 0)
-#define tvadd(a,n)                  (tv__tvmaybegrow(a,n), tv__tvn(a)+=(n), &(a)[tv__tvn(a)-(n)])
+#define tvadd(a,n)                  (tv__tvmaybegrow(a,(int)(n)), tv__tvn(a)+=(n), &(a)[tv__tvn(a)-(n)])
 #define tvlast(a)                   ((a)[tv__tvn(a)-1])
 #define tvindexofnp(a,i,n,psize)    (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),n,psize))
 #define tvindexof(a,i)              ((a) ? (tv__tvfind((char*)(a),(char*)&(i),sizeof(*(a)),tv__tvn(a),sizeof(*(a)))) : -1)
@@ -637,8 +660,7 @@ enum { REG_SIZE = 8, FUNC_THUNK_SIZE = 8 };
 
 typedef struct NativeContext {
     int spills[64] /* is the Nth spill location in use? */, varargsgetsize;
-    char *numlocsp, *varargsget;
-    char **paramnames;
+    char *numlocsp, *varargsget, *symfile, **paramnames;
 } NativeContext;
 static NativeContext NC;
 
@@ -681,6 +703,27 @@ static void i_setup() {
         ob(0xc3); /* ret */
         while ((unsigned long long)C.codep % NC.varargsgetsize != 0) ob(0x90); /* pad with nop */
     }
+
+    /* emit the header of the elf symbol file */
+    #define sym_add64(x) do { unsigned long long v = x; memcpy(tvadd(NC.symfile, sizeof(v)), &v, sizeof(v)); } while(0)
+    #define sym_add32(x) do { unsigned int v = x; memcpy(tvadd(NC.symfile, sizeof(v)), &v, sizeof(v)); } while(0)
+    #define sym_add16(x) do { unsigned short v = x; memcpy(tvadd(NC.symfile, sizeof(v)), &v, sizeof(v)); } while(0)
+    #define sym_add(lit) memcpy(tvadd(NC.symfile, sizeof(lit) - 1), lit, sizeof(lit) - 1)
+    #define sym_ehdr_rest(entry, phoff, shoff, flags, ehsize, phentsize, phnum, shentsize, shnum, shstrndx)         \
+            sym_add64(entry); sym_add64(phoff); sym_add64(shoff); sym_add32(flags); sym_add16(ehsize);              \
+            sym_add16(phentsize); sym_add16(phnum); sym_add16(shentsize); sym_add16(shnum); sym_add16(shstrndx);
+    #define sym_shdr(name, type, flags, addr, offset, size, link, info, addralign, entsize)                         \
+            sym_add32(name); sym_add32(type); sym_add64(flags); sym_add64(addr); sym_add64(offset);                 \
+            sym_add64(size); sym_add32(link); sym_add32(info); sym_add64(addralign); sym_add64(entsize);
+    sym_add("\177ELF\2\1\1\0\0\0\0\0\0\0\0\0\1\0\076\0\1\0\0\0");
+    sym_ehdr_rest(0, 0, 0x40, 0, 0x40, 0, 0, 0x40, 5, 1);
+    sym_shdr(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    sym_shdr(1, 3, 0, 0, 384, 32, 0, 0, 1, 0); /* .shstrtab, SHT_STRTAB, ..., offset, length */
+    sym_shdr(11, 1, 0, /*addr*/0, 0, 0, 0, 0, 0, 0);   /* .text, ... */
+    sym_shdr(17, 1, 0, 0, /*offset*/0, /*size*/0, 0, 0, 0, 0); /* .stab, ... */
+    sym_shdr(23, 3, 0, 0, /*offset*/0, /*size*/0, 0, 0, 0, 0); /* .stabstr, ... */
+    /* .shstrtab */
+    sym_add("\0.shstrtab\0.text\0.stab\0.stabstr\0");
 }
 
 static char* functhunkaddr(long long idx) { return C.codesegend - (idx + 1) * FUNC_THUNK_SIZE; }
@@ -1335,7 +1378,7 @@ static void expr_stmt() {
     SKIP(T_NL);
 }
 
-static void stmt() {
+static void stmt(int top) {
     char *labeldone = 0, *labeltest = 0, **argnames, *name;
     if (CURTOKt == KW(return)) {
         SKIP(KW(return));
@@ -1413,12 +1456,12 @@ static void stmt() {
             }
         }
         i_label(labeldone);
-    } else if (CURTOKt == KW(extern)) {
+    } else if (top && CURTOKt == KW(extern)) {
         SKIP(KW(extern));
         i_extern(CURTOK->data.str);
         NEXT();
         SKIP(T_NL);
-    } else if (CURTOKt == KW(class)) {
+    } else if (top && CURTOKt == KW(class)) {
         char *listunshift = strintern("listaddr_unshift"), **fakeargs = 0, *argsstr = strintern("args"), *pname = 0;
         int i, unshiftidx = tvindexof(C.externnames, listunshift);
         SKIP(KW(class));
@@ -1460,7 +1503,7 @@ static void stmt() {
         i_cmp(KW(==));
         i_ret();
         i_endfunc();
-    } else if (CURTOKt == KW(def)) {
+    } else if (top && CURTOKt == KW(def)) {
         int hasvarargs;
         SKIP(KW(def));
         C.locals = NULL;
@@ -1481,16 +1524,16 @@ static void suite() {
     SKIP(':');
     SKIP(T_NL);
     SKIP(T_INDENT);
-    stmt();
+    stmt(0);
     while (CURTOKt != T_DEDENT)
-        stmt();
+        stmt(0);
     SKIP(T_DEDENT);
 }
 
 static void fileinput() {
     while (CURTOKt != T_END) {
         if (CURTOKt == T_NL) NEXT();
-        else stmt();
+        else stmt(1);
     }
     SKIP(T_END);
 }
@@ -1557,52 +1600,6 @@ static void exportStdlib() {
 /*
  * main api entry points
  */
-int twokRun(char *code, void *(*externLookup)(char *name)) {
-    int ret, allocSize, entryidx;
-    memset(&C, 0, sizeof(C));
-    C.input = code;
-    C.externLookup = externLookup;
-    allocSize = 1<<17;
-    if (setjmp(C.errBuf) == 0) {
-        tba_pushcheckpoint();
-        exportStdlib();
-        tokenize();
-        /* dump tokens generated from stream */
-#if 0
-        { int j;
-        for (j = 0; j < tvsize(C.tokens); ++j) {
-            if (C.tokens[j].type == T_NUM)
-                printf("%3d: %3d %lld\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
-            else
-                printf("%3d: %3d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
-        }}
-#endif
-        C.codeseg = C.codep = twok_allocExec(allocSize);
-        C.codesegend = C.codeseg + allocSize;
-        i_setup();
-        fileinput();
-        if (tvsize(C.vst) != 0) error("internal error, values left on stack");
-        /* dump disassembly of generated code, needs ndisasm in path */
-#if 0
-        { FILE* f = fopen("dump.dat", "wb");
-        //fwrite(C.codeseg + 64*NC.varargsgetsize, 1, C.codep - C.codeseg - 64*NC.varargsgetsize, f);
-        fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
-        fclose(f);
-        ret = system("ndisasm -b64 dump.dat"); }
-#endif
-
-        entryidx = funcidx("__main__");
-        if (entryidx == -1) error("no entry point '__main__'");
-        tba_popcheckpoint();
-        ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
-    } else {
-        tba_popcheckpoint();
-        ret = -1;
-    }
-    twok_freeExec(C.codeseg, allocSize);
-    return ret;
-}
-
 void twokHttpRepl(void *(*externLookup)(char *name)) {
     int sockfd, newfd, rv, yes=1, numbytes;
     struct addrinfo hints, *servinfo;
@@ -1638,6 +1635,56 @@ void twokHttpRepl(void *(*externLookup)(char *name)) {
         }
         close(newfd);
     }
+}
+
+int twokRun(char *code, void *(*externLookup)(char *name)) {
+    int ret, allocSize, entryidx;
+    memset(&C, 0, sizeof(C));
+    C.input = code;
+    C.externLookup = externLookup;
+    allocSize = 1<<17;
+    if (setjmp(C.errBuf) == 0) {
+        tba_pushcheckpoint();
+        exportStdlib();
+        tokenize();
+        /* dump tokens generated from stream */
+#if 0
+        { int j;
+        for (j = 0; j < tvsize(C.tokens); ++j) {
+            if (C.tokens[j].type == T_NUM)
+                printf("%3d: %3d %lld\n", j, C.tokens[j].type, C.tokens[j].data.tokn);
+            else
+                printf("%3d: %3d %s\n", j, C.tokens[j].type, C.tokens[j].data.str);
+        }}
+#endif
+        C.codeseg = C.codep = twok_allocExec(allocSize);
+        C.codesegend = C.codeseg + allocSize;
+        i_setup();
+        fileinput();
+        if (tvsize(C.vst) != 0) error("internal error, values left on stack");
+        /* dump disassembly of generated code, needs ndisasm in path */
+#if 0
+        { FILE* f = fopen("dump.dat", "wb");
+        //fwrite(C.codeseg + 64*NC.varargsgetsize, 1, C.codep - C.codeseg - 64*NC.varargsgetsize, f);
+        fwrite(C.codeseg, 1, C.codep - C.codeseg, f);
+        fclose(f);
+        ret = system("ndisasm -b64 dump.dat"); }
+#endif
+#if 0
+        { FILE* f = fopen("dump.o", "wb");
+        fwrite(NC.symfile, 1, tvsize(NC.symfile), f);
+        fclose(f); }
+#endif
+        entryidx = funcidx("__main__");
+        if (entryidx == -1) error("no entry point '__main__'");
+        tba_popcheckpoint();
+        ret = ((int (*)())(C.codesegend - (entryidx + 1) * FUNC_THUNK_SIZE))();
+    } else {
+        tba_popcheckpoint();
+        ret = -1;
+    }
+    twok_freeExec(C.codeseg, allocSize);
+    return ret;
 }
 
 #endif /* TWOK_DEFINE_IMPLEMENTATION */
