@@ -617,13 +617,5 @@ def __main__():
     b = Things(100, 1000, 10000)
     return Stuff?(b) or Things?(a)
 
-### 32 DISABLED closure 0
-def a(x):
-    def b():
-        return x
-    return b
-def __main__():
-    a(32)()
-
 ### 99999 END
 # vim: set ft=python:
